@@ -130,7 +130,7 @@ For every decision you make: write your answer in one clear sentence, then expla
 ---
 
 ### Decision 3 — Retraining trigger
-*⚠️ Complete by W6D4 — blocks train.py structure*
+*⏳ Complete by W6D4 — blocks train.py structure*
 
 **The question:** Under what conditions should the pipeline retrain the model? What metric do you track, and what threshold triggers a retrain?
 
