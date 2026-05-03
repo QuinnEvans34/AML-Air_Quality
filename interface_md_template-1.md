@@ -164,17 +164,10 @@ For every decision you make: write your answer in one clear sentence, then expla
 ---
 
 ### Decision 5 — Aggregation granularity
-*⚠️ Complete in W5D4 — blocks Contract 2*
 
-**The question:** The OpenAQ API returns individual sensor readings — potentially multiple per location per hour. Should your pipeline work with raw readings or aggregate to one row per location per hour?
+We decided that moving forward with aggregation per hour per location was the best option.
 
-**Things to consider:**
-- If a location has 4 readings in one hour and 1 in the next, does a "1-hour lag" computed on raw rows actually represent one hour ago?
-- Does within-hour variance in PM2.5 carry predictive signal worth preserving, or is the hourly mean sufficient?
-
-**Your decision:**
-
-**Your reasoning:**
+We think that using aggregated rows per hour per location will lead to much cleaner data processing. We want to use a time series forcast, and because of this, we was to feed the model data per hour per location in order to predict the air quality. We think that having messy data that is in the raw format would distort the patterns that our time series model is seeing. Becaues of the way that time series models break down patterns from temporal data, ensuring that the time format is clean is necessary.
 
 ---
 

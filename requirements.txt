@@ -1,0 +1,24 @@
+# Core data + HTTP
+pandas>=2.1
+numpy>=1.26
+requests>=2.31
+python-dotenv>=1.0
+pyarrow>=14.0
+
+# ML
+scikit-learn>=1.4
+mlflow>=2.10
+
+# Serving + dashboard
+fastapi>=0.110
+uvicorn>=0.27
+pydantic>=2.6
+streamlit>=1.32
+
+# Airflow provider (used inside Astro container; safe to keep in root for type checks)
+apache-airflow-providers-http>=4.10
+
+# Dev / testing
+pytest>=8.0
+pytest-cov>=4.1
+ruff>=0.3
