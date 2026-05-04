@@ -1,45 +1,99 @@
-Overview
-========
+# AirAlert
 
-Welcome to Astronomer! This project was generated after you ran 'astro dev init' using the Astronomer CLI. This readme describes the contents of the project, as well as how to run Apache Airflow on your local machine.
+Air quality prediction pipeline that ingests PM2.5 readings from the
+[OpenAQ v3 API](https://api.openaq.org/v3) for three Utah locations
+(Red Butte in Salt Lake City, Smithfield in northern Utah, and Ledges by
+Snow Canyon in St. George), engineers temporal and lag features, trains a
+per-location binary classifier that predicts whether air quality will
+exceed the EPA unhealthy PM2.5 threshold of 35.4 μg/m³, and serves
+predictions via a FastAPI endpoint connected to a Streamlit dashboard.
+The pipeline is orchestrated by an Apache Airflow DAG running daily via
+the Astro CLI inside Docker.
 
-Project Contents
-================
+## Team
 
-Your Astro project contains the following files and folders:
+| Partner | Modules |
+|---|---|
+| Quinton Evans | `include/src/ingest.py`, `include/src/train.py` |
+| Gracelyn Jarret | `include/src/transform.py`, `include/src/serve.py` |
+| Both | `dags/airalert_dag.py`, `app/dashboard.py` |
 
-- dags: This folder contains the Python files for your Airflow DAGs. By default, this directory includes one example DAG:
-    - `example_astronauts`: This DAG shows a simple ETL pipeline example that queries the list of astronauts currently in space from the Open Notify API and prints a statement for each astronaut. The DAG uses the TaskFlow API to define tasks in Python, and dynamic task mapping to dynamically print a statement for each astronaut. For more on how this DAG works, see our [Getting started tutorial](https://www.astronomer.io/docs/learn/get-started-with-airflow).
-- Dockerfile: This file contains a versioned Astro Runtime Docker image that provides a differentiated Airflow experience. If you want to execute other commands or overrides at runtime, specify them here.
-- include: This folder contains any additional files that you want to include as part of your project. It is empty by default.
-- packages.txt: Install OS-level packages needed for your project by adding them to this file. It is empty by default.
-- requirements.txt: Install Python packages needed for your project by adding them to this file. It is empty by default.
-- plugins: Add custom or community plugins for your project to this file. It is empty by default.
-- airflow_settings.yaml: Use this local-only file to specify Airflow Connections, Variables, and Pools instead of entering them in the Airflow UI as you develop DAGs in this project.
+## Project Structure
 
-Deploy Your Project Locally
-===========================
+```
+.
+├── dags/                     # Airflow DAGs (orchestration)
+├── include/
+│   ├── src/                  # Python source modules (ingest, transform, train, serve)
+│   ├── data/
+│   │   ├── raw/              # ingest.py output (gitignored)
+│   │   ├── features/         # transform.py output (gitignored)
+│   │   └── mock/             # development mock CSVs (gitignored)
+│   ├── models/               # local model artifacts (gitignored)
+│   └── mlruns/               # MLflow tracking store (gitignored)
+├── app/                      # Streamlit dashboard
+├── tests/                    # pytest tests
+├── scripts/                  # one-off scripts (e.g., API smoke tests)
+├── .github/
+│   ├── copilot-instructions.md
+│   └── agents.md
+├── INTERFACE.md              # design decisions and data contracts
+├── COPILOT_LOG.md            # AI assistance interaction log
+├── Dockerfile                # Astro Runtime image
+├── requirements.txt
+├── .env.example
+└── README.md
+```
 
-Start Airflow on your local machine by running 'astro dev start'.
+## Setup
 
-This command will spin up five Docker containers on your machine, each for a different Airflow component:
+1. **Clone and create a virtual environment**
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
 
-- Postgres: Airflow's Metadata Database
-- Scheduler: The Airflow component responsible for monitoring and triggering tasks
-- DAG Processor: The Airflow component responsible for parsing DAGs
-- API Server: The Airflow component responsible for serving the Airflow UI and API
-- Triggerer: The Airflow component responsible for triggering deferred tasks
+2. **Configure secrets**
+   ```bash
+   cp .env.example .env
+   ```
+   Then add your OpenAQ API key (register free at
+   <https://explore.openaq.org/account>).
 
-When all five containers are ready the command will open the browser to the Airflow UI at http://localhost:8080/. You should also be able to access your Postgres Database at 'localhost:5432/postgres' with username 'postgres' and password 'postgres'.
+3. **Start the local Airflow environment**
+   ```bash
+   astro dev start
+   ```
+   The Airflow UI will be available at <http://localhost:8080>
+   (login: `admin` / `admin`). See
+   [`astro_setup_guide.md`](astro_setup_guide.md) for full setup details.
 
-Note: If you already have either of the above ports allocated, you can either [stop your existing Docker containers or change the port](https://www.astronomer.io/docs/astro/cli/troubleshoot-locally#ports-are-not-available-for-my-local-airflow-webserver).
+4. **Start MLflow tracking** (separate terminal)
+   ```bash
+   mlflow ui --port 5001
+   ```
+   MLflow runs on port 5001 because macOS reserves 5000 for AirPlay.
 
-Deploy Your Project to Astronomer
-=================================
+5. **Start the prediction API** (separate terminal, after `train.py` has
+   registered models in MLflow)
+   ```bash
+   uvicorn include.src.serve:app --port 8000
+   ```
 
-If you have an Astronomer account, pushing code to a Deployment on Astronomer is simple. For deploying instructions, refer to Astronomer documentation: https://www.astronomer.io/docs/astro/deploy-code/
+## Documentation
 
-Contact
-=======
+- [`INTERFACE.md`](INTERFACE.md) — design decisions, data contracts, and
+  architectural agreements between partners
+- [`.github/copilot-instructions.md`](.github/copilot-instructions.md) —
+  Copilot AI configuration (schema, conventions, project facts)
+- [`.github/agents.md`](.github/agents.md) — Copilot Agent constraints
+- [`COPILOT_LOG.md`](COPILOT_LOG.md) — AI assistance interaction log
+- [`astro_setup_guide.md`](astro_setup_guide.md) — local Airflow environment
+  setup walkthrough
 
-The Astronomer CLI is maintained with love by the Astronomer team. To report a bug or suggest a change, reach out to our support.
+## Tech Stack
+
+Python 3.11, pandas, numpy, scikit-learn, MLflow, FastAPI, Streamlit,
+Apache Airflow (via Astro CLI), pytest, ruff.
