@@ -8,7 +8,7 @@ before locking in INTERFACE.md contract decisions.
 Run from the project root:
     python scripts/sample_openaq.py
 
-Outputs (under data/raw/, which is gitignored):
+Outputs (under include/data/raw/, which is gitignored):
     location_<id>.json          — full /v3/locations response
     sensor_<id>_hours.json      — full /v3/sensors/{id}/hours response
     pm25_sample_loc_<id>.csv    — flattened (timestamp, location_id, pm25)
@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 LOCATION_ID = 221401          # BV — Bountiful, UT
 DAYS_BACK = 7
 BASE_URL = "https://api.openaq.org/v3"
-OUT_DIR = Path("data/raw")
+OUT_DIR = Path("include/data/raw")
 REQUEST_TIMEOUT = 30          # seconds
 
 # --- Helpers --------------------------------------------------------------

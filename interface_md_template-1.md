@@ -1,7 +1,7 @@
 # AirAlert — Interface Contract
 
-**Team:** [Student A Name] + [Student B Name]
-**Last updated:** [Date]
+**Team:** Gracelyn Jarret + Quinn Evans
+**Last updated:** May 4 2026
 
 This is a living document. You will update it as you learn more about the system. That is expected and encouraged. The rule: both partners must understand and agree to every change before it is committed. Any change that affects a module boundary must be reflected in the code within the same PR.
 
@@ -11,10 +11,10 @@ This is a living document. You will update it as you learn more about the system
 
 | Module | Owner (writes it) | Reviewer (reviews PR) |
 |---|---|---|
-| `src/ingest.py` | | |
-| `src/transform.py` | | |
-| `src/train.py` | | |
-| `src/serve.py` | | |
+| `src/ingest.py` | QE | |
+| `src/transform.py` | GJ | |
+| `src/train.py` | QE | |
+| `src/serve.py` | GJ | |
 | `dags/airalert_dag.py` | Both | Both |
 | `app/dashboard.py` | Both | Both |
 
@@ -108,9 +108,10 @@ For every decision you make: write your answer in one clear sentence, then expla
 - The training pipeline fetches yesterday's full day of readings — every reading is already hours old when processed. Does a freshness threshold add meaningful filtering, or does it just remove valid historical data?
 - The serving layer responds to on-demand prediction requests — does it matter how old the input features are when someone asks "is the air safe right now?"
 
-**Your decision:**
+No, we do not think that a freshness filter is needed to distinguish between fresh and old sensor data.
 
-**Your reasoning:**
+We think this because we are going to be training on the data either way. It is going to be pulled into our model, where it is trained, and then it will be served to the UI. If we do not get any data for a couple hours in that day, we do not think this is a meaningful enough disruption to hold a flag in the system. If we were looking at weather, not having completely fresh data, and having gaps in the data would be really important. When it comes to air quality, the volitility is not as high, so we think that having any data will be fine, and that we do not need to mark it with a label.
+
 
 ---
 
@@ -123,9 +124,9 @@ For every decision you make: write your answer in one clear sentence, then expla
 - If you drop rows with missing data, what happens to lag features for that location — does the next valid reading's lag_1h still represent one hour ago?
 - Does it matter whether the missingness is random (battery issue) or systematic (sensor in a high-pollution area that goes offline during spikes)?
 
-**Your decision:**
+We are going to drop rows that do not have any sensor readings.
 
-**Your reasoning:**
+When we have a sensor off, and do not have any information on that row, we then have no information to make a prediction on. Because of this, we only have invalid data. We also would not have any valid data for the lag, if we filled this with an average or any other number, it would create a large skew towards a shift that is not happening, or it would mask a pattern that could be seen by our ML model. Because of this, we want to keep our data clean, and only train the model off signals that we are confident on. 
 
 ---
 
@@ -158,8 +159,15 @@ For every decision you make: write your answer in one clear sentence, then expla
 | Feature | How computed | Why it's useful |
 |---|---|---|
 | is_unsafe | pm25 > 35.4 | Target variable |
-| | | |
-| | | |
+| lag_1_hour | | |
+| lag_3_hours| | |
+| lag_24_hours| | |
+| rolling_mean_3_hours| | |
+| rolling_std_3_hours| | |
+| hour_of_day | | |
+| month_of_year | | |
+| is_weekend | | |
+
 
 ---
 
@@ -180,9 +188,9 @@ We think that using aggregated rows per hour per location will lead to much clea
 - How many rows does each location contribute to your training data — is there enough per-location data to train a reliable per-location model?
 - How does your choice affect `train.py`, the MLflow registry structure, and what `serve.py` needs to load at startup?
 
-**Your decision:**
+We are training on a location in SLC called red butte, in Smithfield utah and in Saint George called ledges by snow canyon.
 
-**Your reasoning:**
+We are only working on data in Utah, because we understand the climate and location well. We are going to be training three separate models, using the same strategy and features, but will be making three different predictions each day. If one day does not have any predictions due to not having clear data, we could show our predictions for closer locations so it does not feel like we are just copping out.
 
 ---
 
@@ -219,67 +227,81 @@ We think that using aggregated rows per hour per location will lead to much clea
 ---
 
 ## Data Contracts
-
+ 
 Complete these after your W5D4 design decisions are settled. Column names and types here must match what is actually in the code. Both partners must be able to build a mock CSV from these specs and develop their module independently.
-
+ 
 ---
-
+ 
 ### Contract 1: `ingest.py` → `transform.py`
-
+ 
 Output file: `data/raw/pm25_{YYYY-MM-DD}.csv`
-
+ 
 > This file is the merged output of both API calls. OpenAQ supplies `pm25` and `location_id`. Open-Meteo supplies `temperature` and `humidity`. They are joined on `(location_id, timestamp)` — see the merge rule in the Data Sources section above.
-
+ 
 | Column | Source | Type | Nullable | Notes |
 |---|---|---|---|---|
 | `timestamp` | Both (merge key) | datetime64[ns, UTC] | No | UTC only; one row per location per hour after aggregation |
 | `location_id` | OpenAQ | int64 | No | OpenAQ location ID |
 | `pm25` | OpenAQ | float64 | Yes | μg/m³; null if sensor offline for that hour |
-| `temperature` | Open-Meteo (`temperature_2m`) | float64 | Yes | °C; null if Open-Meteo had no coverage |
-| `humidity` | Open-Meteo (`relative_humidity_2m`) | float64 | Yes | %; null if Open-Meteo had no coverage |
-
-*Add or remove columns based on your Decision 1 and Decision 2 answers.*
-
+ 
 ---
-
+ 
 ### Contract 2: `transform.py` → `train.py`
-
+ 
 Output file: `data/features/features_{YYYY-MM-DD}.csv`
-
+ 
 *Copy your feature list from Decision 4 here with types and example values added. No blank rows.*
-
+ 
 | Column | Type | Nullable | Example |
 |---|---|---|---|
 | timestamp | datetime64[ns, UTC] | No | 2024-01-15 06:00:00+00:00 |
 | location_id | int64 | No | 1001 |
 | is_unsafe | int | No | 0 |
-| | | | |
-| | | | |
-
+| Lag_1hour| Float | Yes | 20.4 |
+| Lag_3hour| Float | Yes | 12.5 |
+| Lag_24hour| Float |Yes| 23.64|
+| Rolling_Avg_6h | Float | Yes |0.3423 |
+| Rolling_STD_6h| Float | No | 0.78 |
+| Hour_of_Day| Int |No | 4 |
+| Day_of_Week | Int | No | 6 |
+| Month_of_Year | Int| No | 2 |
+| Is_Weekend | Boolean | No | 1 |
 ---
-
+ 
 ### Contract 3: `train.py` → `serve.py`
-
+ 
 Model registered in MLflow as `"AirAlert"` at `Production` stage.
-
+ 
 Feature columns the model expects (must match Contract 2, excluding timestamp, location_id, is_unsafe):
-
+ 
 ```python
-FEATURE_COLS = []  # fill this in — copy from Decision 4
+FEATURE_COLS = ["Lag_1hour", "Lag_3hour", "Lag_24hour", "Rolling_Avg_6h", "Rolling_STD_6h","Hour_of_Day","Day_of_Week","Month_of_Year", "Is_Weekend"]  # fill this in — copy from Decision 4
 ```
-
+ 
 *Complete Decision 7 (classifier choice) before finalising this contract.*
-
+ 
 ---
-
+ 
 ### Contract 4: `serve.py` → `dashboard.py`
-
+ 
 *Complete Decision 8 (dashboard data sourcing) before finalising this contract.*
-
-**API endpoint:** `POST http://localhost:8000/predict`
-
-**Request body:** *(derive from Contract 3 feature columns)*
-
+ 
+**API endpoint:** `POST http://localhost:5001/predict`
+ 
+**Request body:**
+```json
+{
+  "Lag_1hour": 20.4,
+  "Lag_3hour": 18.2,
+  "Lag_24hour": 22.5,
+  "Rolling_Avg_6h": 19.8,
+  "Rolling_STD_6h": 2.3,
+  "Hour_of_Day": 14,
+  "Day_of_Week": 3,
+  "Month_of_Year": 5,
+  "Is_Weekend": 0
+}
+```
 **Response body:**
 ```json
 {
@@ -288,10 +310,11 @@ FEATURE_COLS = []  # fill this in — copy from Decision 4
   "threshold_used": 35.4
 }
 ```
-
-**Health check:** `GET http://localhost:8000/health` → `{"status": "ok"}`
-
+ 
+**Health check:** `GET http://localhost:5001/health` → `{"status": "ok"}`
+ 
 ---
+ 
 
 ## Branch and Commit Conventions
 
