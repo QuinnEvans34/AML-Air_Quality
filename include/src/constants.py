@@ -32,7 +32,7 @@ MODEL_NAME_TEMPLATE: str = "AirAlert_{location}"
 # placeholders let downstream code import this dict; any function that
 # tries to use a None id will fail loudly.
 TARGET_LOCATIONS: dict[str, int | None] = {
-    "red_butte":  None,   # Salt Lake City
-    "smithfield": None,   # northern Utah
-    "ledges":     None,   # near Snow Canyon, St. George
+    "red_butte":  3318370,   # Salt Lake County
+    "smithfield": 305,       # Cache Valley
+    "ledges":     6158842,   # near Snow Canyon, St. George
 }

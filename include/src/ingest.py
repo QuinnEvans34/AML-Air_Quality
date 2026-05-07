@@ -66,11 +66,21 @@ paths, never DataFrames.
 
 from __future__ import annotations
 
-from datetime import datetime
+import os
+import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import requests
+from dotenv import load_dotenv
+
+from include.src.constants import (
+    DATETIME_COL,
+    OPENAQ_PM25_PARAMETER_ID,
+    TARGET_LOCATIONS,
+)
 
 # --- Module-level config --------------------------------------------------
 
@@ -96,6 +106,14 @@ def _build_headers() -> dict[str, str]:
         SystemExit: if OPENAQ_API_KEY is missing or still the placeholder
             value ``"replace-me"`` from ``.env.example``.
     """
+    load_dotenv()
+    api_key = os.environ.get("OPENAQ_API_KEY")
+    if not api_key or api_key == "replace-me":
+        sys.exit(
+            "OPENAQ_API_KEY is not set. Copy .env.example to .env and fill "
+            "in your key from https://explore.openaq.org/account"
+        )
+    return {"X-API-Key": api_key, "Accept": "application/json"}
 
 
 def get_location_metadata(location_id: int) -> dict[str, Any]:
@@ -115,6 +133,10 @@ def get_location_metadata(location_id: int) -> dict[str, Any]:
     Raises:
         requests.HTTPError: if the request fails (4xx / 5xx).
     """
+    url = f"{OPENAQ_BASE_URL}/locations/{location_id}"
+    response = requests.get(url, headers=_build_headers(), timeout=REQUEST_TIMEOUT)
+    response.raise_for_status()
+    return response.json()
 
 
 def find_pm25_sensor_id(location_payload: dict[str, Any]) -> int:
@@ -134,6 +156,20 @@ def find_pm25_sensor_id(location_payload: dict[str, Any]) -> int:
     Raises:
         ValueError: if the location has no PM2.5 sensor.
     """
+    results = location_payload.get("results", [])
+    if not results:
+        raise ValueError("Location payload contains no results")
+    sensors = results[0].get("sensors", [])
+    for sensor in sensors:
+        parameter = sensor.get("parameter", {})
+        if (
+            parameter.get("id") == OPENAQ_PM25_PARAMETER_ID
+            or parameter.get("name") == "pm25"
+        ):
+            return int(sensor["id"])
+    raise ValueError(
+        f"Location {results[0].get('id', '<unknown>')} has no PM2.5 sensor"
+    )
 
 
 def fetch_hourly_pm25(
@@ -161,6 +197,31 @@ def fetch_hourly_pm25(
     Raises:
         requests.HTTPError: if any page request fails.
     """
+    url = f"{OPENAQ_BASE_URL}/sensors/{sensor_id}/hours"
+    rows: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        params = {
+            "datetime_from": start.isoformat(),
+            "datetime_to": end.isoformat(),
+            "limit": PAGE_LIMIT,
+            "page": page,
+        }
+        response = requests.get(
+            url,
+            headers=_build_headers(),
+            params=params,
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        page_results = response.json().get("results", [])
+        if not page_results:
+            break
+        rows.extend(page_results)
+        if len(page_results) < PAGE_LIMIT:
+            break
+        page += 1
+    return rows
 
 
 def parse_to_dataframe(
@@ -186,6 +247,24 @@ def parse_to_dataframe(
     Returns:
         DataFrame with columns ``[timestamp, location_id, pm25]``.
     """
+    records = []
+    for row in raw_rows:
+        period = row.get("period", {})
+        ts_utc = period.get("datetimeFrom", {}).get("utc")
+        records.append(
+            {
+                DATETIME_COL: ts_utc,
+                "location_id": location_id,
+                "pm25": row.get("value"),
+            }
+        )
+    df = pd.DataFrame(records, columns=[DATETIME_COL, "location_id", "pm25"])
+    if not df.empty:
+        df[DATETIME_COL] = pd.to_datetime(df[DATETIME_COL], utc=True)
+        df["location_id"] = df["location_id"].astype("int64")
+        df["pm25"] = df["pm25"].astype("float64")
+        df = df.sort_values(DATETIME_COL).reset_index(drop=True)
+    return df
 
 
 # --- Orchestration --------------------------------------------------------
@@ -223,6 +302,35 @@ def fetch_all_locations(date: str) -> pd.DataFrame:
             TARGET_LOCATIONS value is still ``None``.
         requests.HTTPError: on any underlying API failure.
     """
+    start = datetime.fromisoformat(date).replace(tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+
+    frames: list[pd.DataFrame] = []
+    for location_key, location_id in TARGET_LOCATIONS.items():
+        if location_id is None:
+            raise ValueError(
+                f"TARGET_LOCATIONS[{location_key!r}] is None — populate "
+                f"constants.py before running ingest"
+            )
+        payload = get_location_metadata(location_id)
+        sensor_id = find_pm25_sensor_id(payload)
+        raw_rows = fetch_hourly_pm25(sensor_id, start, end)
+        frame = parse_to_dataframe(raw_rows, location_id)
+        frames.append(frame)
+
+    df = pd.concat(frames, ignore_index=True)
+    df = df.dropna(subset=["pm25"]).reset_index(drop=True)
+    df = (
+        df.groupby(["location_id", DATETIME_COL], as_index=False)["pm25"]
+        .mean()
+        .sort_values([DATETIME_COL, "location_id"])
+        .reset_index(drop=True)
+    )
+    if df.empty:
+        raise ValueError(
+            f"No PM2.5 readings returned across all locations for {date}"
+        )
+    return df
 
 
 def save_raw_pm25(df: pd.DataFrame, date: str) -> Path:
@@ -245,6 +353,23 @@ def save_raw_pm25(df: pd.DataFrame, date: str) -> Path:
         ValueError: if the DataFrame is empty, has the wrong columns,
             or contains nulls in any column.
     """
+    if df.empty:
+        raise ValueError("Refusing to write empty DataFrame")
+
+    required = [DATETIME_COL, "location_id", "pm25"]
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise ValueError(f"Contract 1 columns missing: {missing}")
+
+    if df[required].isna().any().any():
+        raise ValueError(
+            f"Nulls present in Contract 1 output: {df.isna().sum().to_dict()}"
+        )
+
+    out_path = DATA_RAW_DIR / f"pm25_{date}.csv"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_path, index=False)
+    return out_path
 
 
 def ingest_task(**context: Any) -> str:
@@ -269,3 +394,7 @@ def ingest_task(**context: Any) -> str:
         ValueError: if no readings were fetched.
         requests.HTTPError: on API failure.
     """
+    ds = context["ds"]
+    df = fetch_all_locations(ds)
+    out_path = save_raw_pm25(df, ds)
+    return str(out_path)
