@@ -86,6 +86,7 @@ Future work
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -125,6 +126,10 @@ FEATURE_COLS: list[str] = [
     "is_weekend",
 ]
 TARGET_COL: str = "is_unsafe"
+DATETIME_COL: str = "timestamp"
+
+_DS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_MIN_TRAIN_ROWS: int = 24  # less than ~1 day of training is too sparse
 
 
 # --- Data loading and splitting -------------------------------------------
@@ -159,6 +164,27 @@ def load_features(path: Path) -> pd.DataFrame:
             error message lists every offender (and per-column null
             counts on the null path).
     """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Features CSV not found: {path}")
+
+    df = pd.read_csv(path, parse_dates=[DATETIME_COL])
+
+    required = [DATETIME_COL, "location_id", TARGET_COL, *FEATURE_COLS]
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise ValueError(
+            f"Contract-2 columns missing from {path}: {missing}"
+        )
+
+    null_counts = df[required].isna().sum()
+    bad = null_counts[null_counts > 0].to_dict()
+    if bad:
+        raise ValueError(
+            f"Nulls present in Contract-2 required columns of {path}: {bad}"
+        )
+
+    return df
 
 
 def split_by_location(df: pd.DataFrame) -> dict[int, pd.DataFrame]:
@@ -188,6 +214,23 @@ def split_by_location(df: pd.DataFrame) -> dict[int, pd.DataFrame]:
             (either an extra unknown id appears, or one of the three
             target locations is missing from the data).
     """
+    expected_ids = {lid for lid in TARGET_LOCATIONS.values() if lid is not None}
+    present_ids = set(df["location_id"].unique().tolist())
+
+    if present_ids != expected_ids:
+        unexpected = present_ids - expected_ids
+        missing = expected_ids - present_ids
+        raise ValueError(
+            "location_id set in features does not match TARGET_LOCATIONS — "
+            f"missing={sorted(missing)} unexpected={sorted(unexpected)}"
+        )
+
+    out: dict[int, pd.DataFrame] = {}
+    for location_id, sub in df.groupby("location_id"):
+        out[int(location_id)] = (
+            sub.sort_values(DATETIME_COL).reset_index(drop=True)
+        )
+    return out
 
 
 def chronological_split(
@@ -226,6 +269,20 @@ def chronological_split(
             split"`` when the implied training cutoff would be fewer
             than 24 rows (less than roughly one day of training data).
     """
+    sorted_df = df.sort_values(DATETIME_COL).reset_index(drop=True)
+    cutoff = int(len(sorted_df) * (1.0 - test_fraction))
+
+    if cutoff < _MIN_TRAIN_ROWS:
+        raise ValueError(
+            "Not enough rows for chronological split "
+            f"(cutoff={cutoff} < {_MIN_TRAIN_ROWS}, total rows={len(sorted_df)})"
+        )
+
+    X_train = sorted_df.iloc[:cutoff][FEATURE_COLS]
+    X_test = sorted_df.iloc[cutoff:][FEATURE_COLS]
+    y_train = sorted_df.iloc[:cutoff][TARGET_COL].astype(int)
+    y_test = sorted_df.iloc[cutoff:][TARGET_COL].astype(int)
+    return X_train, X_test, y_train, y_test
 
 
 # --- Modeling and metrics -------------------------------------------------
@@ -252,6 +309,15 @@ def train_logistic_regression(
         A fitted ``sklearn.linear_model.LogisticRegression`` instance,
         ready for ``predict`` / ``predict_proba``.
     """
+    from sklearn.linear_model import LogisticRegression
+
+    model = LogisticRegression(
+        class_weight="balanced",
+        max_iter=1000,
+        random_state=0,
+    )
+    model.fit(X_train, y_train)
+    return model
 
 
 def compute_metrics(
@@ -289,6 +355,33 @@ def compute_metrics(
         - ``false_negatives`` (int)   — Count of unsafe hours predicted safe.
         - ``true_positives`` (int)    — Count of unsafe hours predicted unsafe.
     """
+    from sklearn.metrics import (
+        accuracy_score,
+        confusion_matrix,
+        f1_score,
+        precision_score,
+        recall_score,
+    )
+
+    y_pred = model.predict(X_test)
+
+    f1 = f1_score(y_test, y_pred, pos_label=1, zero_division=0)
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred, pos_label=1, zero_division=0)
+    recall = recall_score(y_test, y_pred, pos_label=1, zero_division=0)
+
+    cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
+    tn, fp, fn, tp = cm.ravel()
+
+    return {
+        "f1": float(f1),
+        "baseline_f1": baseline_f1_score(y_test),
+        "accuracy": float(accuracy),
+        "precision": float(precision),
+        "recall": float(recall),
+        "false_negatives": int(fn),
+        "true_positives": int(tp),
+    }
 
 
 def baseline_f1_score(y_test: pd.Series) -> float:
@@ -309,6 +402,12 @@ def baseline_f1_score(y_test: pd.Series) -> float:
         ``f1_score(..., pos_label=1, zero_division=0)`` so the
         all-zero-predictions edge case does not raise.
     """
+    from sklearn.metrics import f1_score
+
+    y_baseline = [0] * len(y_test)
+    return float(
+        f1_score(y_test, y_baseline, pos_label=1, zero_division=0)
+    )
 
 
 # --- MLflow + persistence -------------------------------------------------
@@ -352,6 +451,32 @@ def log_run_to_mlflow(
         Any ``mlflow`` client exception (e.g. connection error to the
         tracking URI, registry-permission errors) propagates uncaught.
     """
+    import mlflow
+    import mlflow.sklearn
+
+    mlflow.set_tracking_uri(MLFLOW_URI)
+    mlflow.set_experiment(MLFLOW_EXPERIMENT)
+
+    run_name = f"{location_key}_{ds}"
+    registered_name = MODEL_NAME_TEMPLATE.format(location=location_key)
+
+    with mlflow.start_run(run_name=run_name) as run:
+        mlflow.log_params(
+            {
+                "location_key": location_key,
+                "ds": ds,
+                "class_weight": "balanced",
+                "max_iter": 1000,
+                "random_state": 0,
+            }
+        )
+        mlflow.log_metrics(metrics)
+        mlflow.sklearn.log_model(
+            model,
+            artifact_path="model",
+            registered_model_name=registered_name,
+        )
+        return run.info.run_id
 
 
 def save_model_bundle(
@@ -391,6 +516,26 @@ def save_model_bundle(
             ``set(TARGET_LOCATIONS)``. The message lists missing and
             unexpected keys.
     """
+    import joblib
+
+    expected_keys = set(TARGET_LOCATIONS)
+    given_keys = set(models_by_location)
+    if given_keys != expected_keys:
+        raise ValueError(
+            "models_by_location keys do not match TARGET_LOCATIONS — "
+            f"missing={sorted(expected_keys - given_keys)} "
+            f"unexpected={sorted(given_keys - expected_keys)}"
+        )
+
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
+    for location_key, model in models_by_location.items():
+        per_loc_path = MODELS_DIR / f"{location_key}_{ds}.pkl"
+        joblib.dump(model, per_loc_path)
+
+    bundle_path = MODELS_DIR / LATEST_MODEL_FILENAME
+    joblib.dump(models_by_location, bundle_path)
+    return bundle_path
 
 
 # --- Airflow entry point --------------------------------------------------
@@ -449,3 +594,48 @@ def retrain_task(features_path: str, ds: str) -> dict:
             the Airflow task loudly rather than silently produce an
             incomplete run.
     """
+    if not isinstance(features_path, str) or not features_path.strip():
+        raise ValueError(
+            f"features_path must be a non-empty string; got {features_path!r}"
+        )
+    if not isinstance(ds, str) or not _DS_RE.match(ds):
+        raise ValueError(
+            f"ds must be a YYYY-MM-DD string; got {ds!r}"
+        )
+
+    df = load_features(Path(features_path))
+    per_location_frames = split_by_location(df)
+
+    models_by_location: dict[str, "LogisticRegression"] = {}
+    per_loc_metrics: dict[str, dict[str, float | int]] = {}
+
+    for location_key, location_id in TARGET_LOCATIONS.items():
+        if location_id is None:
+            raise ValueError(
+                f"TARGET_LOCATIONS[{location_key!r}] is None — populate "
+                "constants.py before running retrain_task"
+            )
+        loc_df = per_location_frames[location_id]
+        X_train, X_test, y_train, y_test = chronological_split(loc_df)
+        model = train_logistic_regression(X_train, y_train)
+        metrics = compute_metrics(model, X_test, y_test)
+        log_run_to_mlflow(model, metrics, location_key, ds)
+
+        models_by_location[location_key] = model
+        per_loc_metrics[location_key] = metrics
+
+    save_model_bundle(models_by_location, ds)
+
+    float_keys = ("f1", "baseline_f1", "accuracy", "precision", "recall")
+    int_keys = ("false_negatives", "true_positives")
+    aggregated: dict[str, float | int] = {}
+    n = len(per_loc_metrics)
+    for key in float_keys:
+        aggregated[key] = float(
+            sum(m[key] for m in per_loc_metrics.values()) / n
+        )
+    for key in int_keys:
+        aggregated[key] = int(
+            sum(m[key] for m in per_loc_metrics.values())
+        )
+    return aggregated
