@@ -120,11 +120,10 @@ When we have a sensor off, and do not have any information on that row, we then 
 - How would you know your model has gotten worse? Do you have access to ground truth labels on live data to compute a performance metric after deployment?
 - What is the cost of a false negative (predicting safe when air is actually unsafe), and what F1 floor reflects that cost?
 
-**Your decision:** We are deferring this decision to W6D4 when we begin implementing `_retrain_task` and have a baseline model to evaluate against.
+**Your decision:** We want to retrain the model weekly, with a trigger on missing true positives.
 
-**Your reasoning:** Without a baseline model and a sense of how it actually performs on real data, picking a retrain threshold would be guesswork. The metric we expect to track is F1 on the unsafe class, since that is the project's primary evaluation metric and false negatives (predicting safe when air is actually unsafe) are the more costly error type for an air-quality alert system. The threshold and cadence will be set after observing baseline performance over a multi-week window — committing to either now would just be a number we'd revisit immediately.
+**Your reasoning:** We will be predicting daily air safety, because of this, the next day we will know if we were right or wrong. when we pull the data, we want to look at the previous prediction, and then see if it was correct or not. If it missed a true positive (did not predict bad weather, when it was) then we will trigger a retrain. If this were to not happen, then we would schedule the model to retrain at the begining of each week. So when we pull the data on monday morning at 6 am, we will also trigger a retrain. Basically, we will train it no matter what, each monday, when we pull new data. Then, if we miss any true positives then we will retrain the model to ensure we have more accuracy in the future.
 
-**Baseline outline** From our current understanding we should trigger a retrain each day when the data comes in. we will run it on all current data, if the model performs better than it did the day before, then we will include the new model. This is a very basic idea, and will probably be changed as we go on, per our outline above. But, to show we put thought into this, we are putting a basic outline of what we are planning to do, and what we think will be best. While also acknowledging that we will likely be changing this decsion in the coming days. As of right now, new model will be trained each day after the new batch has come in.
 
 ---
 
