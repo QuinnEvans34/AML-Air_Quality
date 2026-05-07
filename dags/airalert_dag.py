@@ -135,8 +135,8 @@ def airalert_pipeline():
         if output_path.exists():
             return str(output_path)
 
-        from include.src.transform import transform_task
-        return transform_task(input_path=validated_path, **ctx)
+        from include.src.transform import build_features
+        return build_features(input_path=validated_path, **ctx)
 
     @task
     def retrain_model(features_path: str) -> dict:
