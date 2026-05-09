@@ -37,6 +37,20 @@ MLFLOW_URI: str = os.environ.get(
 # Format: MODEL_NAME_TEMPLATE.format(location="red_butte") -> "AirAlert_red_butte"
 MODEL_NAME_TEMPLATE: str = "AirAlert_{location}"
 
+# Decision 3 — retraining trigger.
+# Retrain a per-location model when its rolling F1 on the unsafe class drops
+# below this floor. Below 0.70, recall typically falls under 0.50, meaning
+# we miss more than half of the unsafe hours; at that point a sensitive-group
+# resident (asthma, COPD, elderly, young children) is better off ignoring
+# our dashboard than trusting it, and the model has stopped serving its
+# public-health purpose.
+F1_RETRAIN_THRESHOLD: float = 0.70
+
+# Weekly retrain backstop: Python ``datetime.weekday()`` index for Monday.
+# A weekly unconditional retrain catches gradual drift even when each day's
+# F1 stays just above the threshold.
+WEEKLY_RETRAIN_WEEKDAY: int = 0
+
 # Target locations — OpenAQ location_id values to be filled in once we
 # query /v3/locations to identify the three named Utah sites. None
 # placeholders let downstream code import this dict; any function that

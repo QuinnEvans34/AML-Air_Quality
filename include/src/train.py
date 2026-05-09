@@ -541,60 +541,120 @@ def save_model_bundle(
 
 # --- Airflow entry point --------------------------------------------------
 
-def retrain_task(features_path: str, ds: str) -> dict:
+def _load_existing_bundle() -> dict:
     """
-    Public entry point: train all three per-location models for ``ds``.
+    Load ``include/models/latest_model.pkl`` if present, else return ``{}``.
 
-    This is the function imported and called by the ``retrain_model``
-    task in ``dags/airalert_dag.py``. The signature is fixed by that
-    caller and must not change. Per Decision 3, this function trains
-    unconditionally whenever it is invoked — the DAG owns the question
-    of *when* to retrain (weekly cadence plus on-FN trigger).
+    Used by ``retrain_task`` to preserve estimators for locations that the
+    DAG decided not to retrain on a given day. Returns an empty dict on any
+    error so a corrupt bundle does not poison a partial-retrain run; the
+    caller will fall back to retraining the affected locations.
+    """
+    import joblib
+    bundle_path = MODELS_DIR / LATEST_MODEL_FILENAME
+    if not bundle_path.exists():
+        return {}
+    try:
+        loaded = joblib.load(bundle_path)
+        return dict(loaded) if isinstance(loaded, dict) else {}
+    except Exception:  # noqa: BLE001 — corrupt bundle, force full retrain
+        return {}
 
-    Per call, it:
 
-    1. Loads and validates the Contract-2 features CSV at
-       ``features_path``.
-    2. Splits the frame by ``location_id``.
-    3. For each ``(location_key, location_id)`` in
-       ``TARGET_LOCATIONS``, performs a chronological 80/20 split,
-       fits a balanced logistic regression, scores it on the holdout,
-       and registers the run in MLflow under
-       ``MODEL_NAME_TEMPLATE.format(location=location_key)``.
-    4. Saves a unified ``latest_model.pkl`` plus per-location
-       date-stamped pickles under ``include/models/``.
-    5. Aggregates metrics across locations: float metrics are
-       averaged, integer counts (FN, TP) are summed. The returned
-       dict is the XCom value for the downstream task.
+def _load_previous_per_location_metrics() -> dict[str, dict]:
+    """
+    Read the most recent ``metrics_*.json`` and return its ``per_location``
+    sub-dict (or an empty dict if no metrics file exists yet).
+
+    Used by ``retrain_task`` to carry forward yesterday's metrics for
+    locations that did not retrain today.
+    """
+    import json
+    files = sorted(MODELS_DIR.glob("metrics_*.json"))
+    if not files:
+        return {}
+    try:
+        data = json.loads(files[-1].read_text())
+    except Exception:  # noqa: BLE001 — corrupt file, treat as missing
+        return {}
+    return dict(data.get("per_location") or {})
+
+
+def _load_previous_retrain_history() -> dict[str, str]:
+    """
+    Read the most recent ``metrics_*.json`` and return its
+    ``retrain_history`` sub-dict (or empty if no prior file exists).
+    """
+    import json
+    files = sorted(MODELS_DIR.glob("metrics_*.json"))
+    if not files:
+        return {}
+    try:
+        data = json.loads(files[-1].read_text())
+    except Exception:  # noqa: BLE001 — corrupt file, treat as missing
+        return {}
+    return dict(data.get("retrain_history") or {})
+
+
+def retrain_task(
+    features_path: str,
+    ds: str,
+    locations_to_retrain: list[str] | None = None,
+) -> dict:
+    """
+    Public entry point: train per-location classifiers for ``ds``.
+
+    Per Decision 3, the DAG decides *which* locations need retraining each
+    day (per-location F1 < 0.70 or weekly Monday backstop) and passes that
+    list in via ``locations_to_retrain``. This function:
+
+    1. Loads and validates the Contract-2 features CSV.
+    2. For each location in ``locations_to_retrain``: chronologically
+       splits, fits a balanced logistic regression, scores the holdout,
+       and (best-effort) logs the run to MLflow.
+    3. For every other location: reuses the estimator from the existing
+       ``latest_model.pkl`` bundle and the per-location metrics from the
+       most recent ``metrics_*.json``. If either is missing for that
+       location, the location is force-retrained as a bootstrap fallback.
+    4. Saves the merged bundle (new + preserved entries) to
+       ``include/models/latest_model.pkl``. Date-stamped per-location
+       pickles are written **only** for locations that retrained.
+    5. Returns an aggregated metrics dict with rubric-required top-level
+       keys plus a ``per_location`` breakdown and a ``retrain_history``
+       map showing the ``ds`` of each location's most recent retrain.
 
     Args:
         features_path: Path string to a Contract-2 features CSV
-            (typically the output of the upstream
-            ``engineer_features`` task — i.e.
-            ``include/data/features/features_{ds}.csv``). Must be a
-            non-empty string.
-        ds: Airflow execution date in ``YYYY-MM-DD`` format.
+            (typically the output of the upstream ``engineer_features``
+            task — i.e. ``include/data/features/features_{ds}.csv``).
+            Must be a non-empty string.
+        ds: Airflow execution date in YYYY-MM-DD format.
+        locations_to_retrain: List of ``TARGET_LOCATIONS`` keys to
+            retrain. ``None`` (default) retrains all three (legacy /
+            bootstrap behavior). ``[]`` retrains nothing if a complete
+            existing bundle and previous per-location metrics are
+            available; otherwise the affected locations are bootstrapped.
 
     Returns:
-        An aggregated metrics dict with keys ``f1``, ``baseline_f1``,
-        ``accuracy``, ``precision``, ``recall`` (floats — mean across
-        the three locations) and ``false_negatives``, ``true_positives``
-        (ints — sum across the three locations). Per-location detail
-        is not in the return value; it lives in MLflow.
+        A dict with these top-level keys:
+
+        - ``f1``, ``baseline_f1``, ``accuracy``, ``precision``, ``recall``
+          (floats — mean across all three locations).
+        - ``false_negatives``, ``true_positives`` (ints — sum across all
+          three locations).
+        - ``per_location`` (dict): one entry per ``TARGET_LOCATIONS`` key,
+          each with the same metric keys above (no further nesting).
+        - ``retrain_history`` (dict): ``{location_key: ds_of_last_retrain}``.
 
     Raises:
-        ValueError: ``features_path`` is empty / not a string, or
-            ``ds`` is not a YYYY-MM-DD string, or any downstream
-            validation in ``load_features`` /
-            ``split_by_location`` / ``chronological_split`` /
-            ``save_model_bundle`` fails.
+        ValueError: ``features_path`` is empty/not a string, ``ds`` is not
+            YYYY-MM-DD, or any downstream validation fails.
         FileNotFoundError: ``features_path`` does not exist.
-        Exception: Any ``sklearn``, ``mlflow``, or ``joblib`` error
-            from the underlying calls propagates uncaught — failures
-            in training, registration, or persistence should fail
-            the Airflow task loudly rather than silently produce an
-            incomplete run.
     """
+    import json
+    import logging
+    logger = logging.getLogger(__name__)
+
     if not isinstance(features_path, str) or not features_path.strip():
         raise ValueError(
             f"features_path must be a non-empty string; got {features_path!r}"
@@ -604,44 +664,99 @@ def retrain_task(features_path: str, ds: str) -> dict:
             f"ds must be a YYYY-MM-DD string; got {ds!r}"
         )
 
+    if locations_to_retrain is None:
+        locations_to_retrain = list(TARGET_LOCATIONS.keys())
+    else:
+        # Defensive: drop any unknown keys silently (the DAG should never
+        # pass these, but a typo would otherwise cause a confusing crash).
+        locations_to_retrain = [
+            k for k in locations_to_retrain if k in TARGET_LOCATIONS
+        ]
+    retrain_set = set(locations_to_retrain)
+
     df = load_features(Path(features_path))
     per_location_frames = split_by_location(df)
 
+    existing_bundle = _load_existing_bundle()
+    prev_per_loc = _load_previous_per_location_metrics()
+    prev_history = _load_previous_retrain_history()
+
     models_by_location: dict[str, "LogisticRegression"] = {}
     per_loc_metrics: dict[str, dict[str, float | int]] = {}
+    actually_retrained: list[str] = []
+    retrain_history: dict[str, str] = dict(prev_history)
 
-    # ---- Step 1: Train all three models and compute metrics ---------------
-    # Training is the deliverable; MLflow tracking is bookkeeping. Do all
-    # training first so a tracking-server outage cannot prevent the model
-    # artifact from being persisted.
+    # ---- Step 1: Decide per location whether we have what we need ---------
+    # If a location is in the keep-list but has no existing model OR no
+    # previous metrics, we MUST retrain it (bootstrap fallback) — otherwise
+    # the bundle would be incomplete and the metrics dict would be missing
+    # rubric-required keys.
     for location_key, location_id in TARGET_LOCATIONS.items():
         if location_id is None:
             raise ValueError(
                 f"TARGET_LOCATIONS[{location_key!r}] is None — populate "
                 "constants.py before running retrain_task"
             )
+        if location_key not in retrain_set:
+            missing_model = location_key not in existing_bundle
+            missing_metrics = location_key not in prev_per_loc
+            if missing_model or missing_metrics:
+                logger.warning(
+                    "Bootstrap fallback: %s was in keep-list but %s missing; "
+                    "forcing retrain.",
+                    location_key,
+                    "model" if missing_model else "metrics",
+                )
+                retrain_set.add(location_key)
+
+    # ---- Step 2: Train the locations that need it -------------------------
+    # MLflow tracking is bookkeeping; do all training and metric computation
+    # first so a tracking outage cannot prevent the bundle from being saved.
+    for location_key, location_id in TARGET_LOCATIONS.items():
+        if location_key not in retrain_set:
+            continue
         loc_df = per_location_frames[location_id]
         X_train, X_test, y_train, y_test = chronological_split(loc_df)
         model = train_logistic_regression(X_train, y_train)
         metrics = compute_metrics(model, X_test, y_test)
-
         models_by_location[location_key] = model
         per_loc_metrics[location_key] = metrics
+        actually_retrained.append(location_key)
+        retrain_history[location_key] = ds
 
-    # ---- Step 2: Persist the model bundle to disk -------------------------
-    # The rubric requires include/models/latest_model.pkl to load with
-    # joblib.load(); doing this BEFORE MLflow guarantees the artifact exists
-    # even if the tracking server is unreachable.
-    save_model_bundle(models_by_location, ds)
+    # ---- Step 3: Carry forward kept locations -----------------------------
+    for location_key in TARGET_LOCATIONS:
+        if location_key in models_by_location:
+            continue
+        # We already verified existing_bundle/prev_per_loc have what we need
+        # in Step 1 (else we forced retrain).
+        models_by_location[location_key] = existing_bundle[location_key]
+        per_loc_metrics[location_key] = dict(prev_per_loc[location_key])
+        # retrain_history already contains the prior ds for this location
 
-    # ---- Step 3: Log to MLflow (best-effort) ------------------------------
-    # MLflow tracking failures (server down, allowlist mismatch, deleted
-    # experiment, artifact-store permission error) are demoted to a warning.
-    # The pipeline succeeds with a working model bundle on disk; the user
-    # can fix the tracking server and re-run later if they want runs in the
-    # registry. To opt out of MLflow entirely, set AIRALERT_SKIP_MLFLOW=1.
-    import logging
-    logger = logging.getLogger(__name__)
+    # ---- Step 4: Persist the merged bundle --------------------------------
+    # save_model_bundle writes BOTH latest_model.pkl AND date-stamped
+    # per-location pickles. The date-stamped pickles for locations we did
+    # NOT retrain would be misleading (they'd suggest a fresh fit on `ds`
+    # that didn't happen), so we use a small inline dump that only writes
+    # the bundle plus the retrained locations' date-stamped files.
+    import joblib
+    expected_keys = set(TARGET_LOCATIONS)
+    if set(models_by_location) != expected_keys:
+        raise ValueError(
+            "models_by_location keys do not match TARGET_LOCATIONS — "
+            f"missing={sorted(expected_keys - set(models_by_location))} "
+            f"unexpected={sorted(set(models_by_location) - expected_keys)}"
+        )
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    for location_key in actually_retrained:
+        joblib.dump(
+            models_by_location[location_key],
+            MODELS_DIR / f"{location_key}_{ds}.pkl",
+        )
+    joblib.dump(models_by_location, MODELS_DIR / LATEST_MODEL_FILENAME)
+
+    # ---- Step 5: MLflow (best-effort, only for retrained locations) -------
     if os.environ.get("AIRALERT_SKIP_MLFLOW", "").strip().lower() in {
         "1", "true", "yes", "on",
     }:
@@ -649,28 +764,38 @@ def retrain_task(features_path: str, ds: str) -> dict:
             "AIRALERT_SKIP_MLFLOW set; skipping MLflow run logging for %s", ds
         )
     else:
-        for location_key, model in models_by_location.items():
+        for location_key in actually_retrained:
             try:
                 log_run_to_mlflow(
-                    model, per_loc_metrics[location_key], location_key, ds
+                    models_by_location[location_key],
+                    per_loc_metrics[location_key],
+                    location_key,
+                    ds,
                 )
-            except Exception as exc:  # noqa: BLE001 — best-effort logging
+            except Exception as exc:  # noqa: BLE001 — best-effort
                 logger.warning(
                     "MLflow logging failed for %s on %s (%s: %s); "
                     "model bundle is still saved to disk",
                     location_key, ds, type(exc).__name__, exc,
                 )
 
+    # ---- Step 6: Aggregate metrics for XCom -------------------------------
     float_keys = ("f1", "baseline_f1", "accuracy", "precision", "recall")
     int_keys = ("false_negatives", "true_positives")
-    aggregated: dict[str, float | int] = {}
+    aggregated: dict[str, float | int | dict] = {}
     n = len(per_loc_metrics)
     for key in float_keys:
         aggregated[key] = float(
-            sum(m[key] for m in per_loc_metrics.values()) / n
+            sum(float(m[key]) for m in per_loc_metrics.values()) / n
         )
     for key in int_keys:
         aggregated[key] = int(
-            sum(m[key] for m in per_loc_metrics.values())
+            sum(int(m[key]) for m in per_loc_metrics.values())
         )
+    aggregated["per_location"] = {
+        loc: {k: (float(v) if k in float_keys else int(v))
+              for k, v in m.items()}
+        for loc, m in per_loc_metrics.items()
+    }
+    aggregated["retrain_history"] = retrain_history
     return aggregated
