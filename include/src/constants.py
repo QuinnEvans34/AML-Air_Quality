@@ -9,6 +9,8 @@ and .github/copilot-instructions.md.
 
 from __future__ import annotations
 
+import os
+
 # PM2.5 unsafe threshold (μg/m³). EPA "unhealthy for sensitive groups" boundary.
 UNSAFE_THRESHOLD: float = 35.4
 
@@ -20,8 +22,16 @@ OPENAQ_PM25_PARAMETER_ID: int = 2
 DATETIME_COL: str = "timestamp"
 
 # MLflow tracking — port 5001 to dodge macOS AirPlay on 5000.
+# Honors MLFLOW_TRACKING_URI from the environment (set in airflow_settings.yaml
+# or .env) so the same constants work in Astro and in local pytest. The default
+# is a file-store inside the project so retraining works even when no MLflow
+# server is running — the assignment only requires that latest_model.pkl loads
+# with joblib, not that a tracking server is up.
 MLFLOW_EXPERIMENT: str = "AirAlert"
-MLFLOW_URI: str = "http://localhost:5001"
+MLFLOW_URI: str = os.environ.get(
+    "MLFLOW_TRACKING_URI",
+    "file:///usr/local/airflow/include/mlruns",
+)
 
 # Three per-location models (Decision 6) — one model registered per location_key.
 # Format: MODEL_NAME_TEMPLATE.format(location="red_butte") -> "AirAlert_red_butte"

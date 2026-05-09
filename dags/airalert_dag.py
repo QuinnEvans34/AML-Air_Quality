@@ -126,7 +126,7 @@ def airalert_pipeline():
 
         Raises:
             ValueError: if no rows survive feature computation
-                        (raised inside transform_task).
+                        (raised inside build_features).
         """
         ctx = get_current_context()
         ds = ctx["ds"]
@@ -136,7 +136,10 @@ def airalert_pipeline():
             return str(output_path)
 
         from include.src.transform import build_features
-        return build_features(input_path=validated_path, **ctx)
+        return build_features(
+            raw_data_path=Path(validated_path),
+            output_path=output_path,
+        )
 
     @task
     def retrain_model(features_path: str) -> dict:
@@ -150,6 +153,12 @@ def airalert_pipeline():
             Metrics dict with keys: f1, baseline_f1, accuracy, precision, recall.
             Visible in XCom for the Part 4 verification.
 
+        Idempotency:
+            Skips the work only when BOTH ``include/models/metrics_{ds}.json``
+            and ``include/models/latest_model.pkl`` already exist — that
+            guarantees the cached metrics correspond to a real, loadable
+            model bundle. Touch (delete) either file to force a rerun.
+
         Raises:
             ValueError: if features_path is missing or empty
                         (raised inside retrain_task).
@@ -159,8 +168,13 @@ def airalert_pipeline():
         ctx = get_current_context()
         ds = ctx["ds"]
         metrics_path = MODELS_DIR / f"metrics_{ds}.json"
+        bundle_path  = MODELS_DIR / "latest_model.pkl"
 
-        if metrics_path.exists():
+        # Both artifacts must exist for the cached metrics to be trusted.
+        # Earlier, only the metrics file was checked — that let half-broken
+        # runs (e.g. MLflow failed mid-loop) cache stale zeros and skip
+        # every subsequent retrain attempt without ever touching MLflow.
+        if metrics_path.exists() and bundle_path.exists():
             return json.loads(metrics_path.read_text())
 
         from include.src.train import retrain_task
