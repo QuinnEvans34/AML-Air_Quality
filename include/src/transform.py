@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -153,25 +154,100 @@ def date_feature(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# Number of prior days of raw CSVs to concatenate into the feature build.
+# pm25_lag_24h requires at least 25 hours of history per location; reading
+# a 7-day window gives lag and rolling features enough lookback to survive
+# the post-feature dropna() and leaves a buffer when a prior day is missing.
+_HISTORY_DAYS: int = 7
+
+
+def _target_date_from_filename(raw_data_path: Path) -> "datetime | None":
+    """Parse YYYY-MM-DD out of ``pm25_{date}.csv``; return None if not parseable."""
+    stem = raw_data_path.stem
+    if not stem.startswith("pm25_"):
+        return None
+    try:
+        return datetime.strptime(stem.replace("pm25_", "", 1), "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def _gather_raw_history(raw_data_path: Path) -> pd.DataFrame:
+    """
+        Read the target raw CSV and any prior daily raw CSVs in the same
+        directory so lag/rolling features have enough history to be computed.
+
+        When the target file's name does not encode a date (e.g. an ad-hoc
+        sample file used in tests), this reads only the target file so
+        callers operating outside the daily-DAG convention still work.
+
+        Args:
+            raw_data_path: Path to the target raw CSV
+                (``include/data/raw/pm25_{YYYY-MM-DD}.csv``).
+
+        Returns:
+            Concatenated DataFrame containing rows from the target day plus
+            up to ``_HISTORY_DAYS`` prior days (when a date window can be
+            derived), deduped on ``(location_id, timestamp)`` and sorted
+            ascending.
+
+        Raises:
+            FileNotFoundError: if the target raw CSV does not exist.
+    """
+    raw_data_path = Path(raw_data_path)
+    if not raw_data_path.exists():
+        raise FileNotFoundError(f"Raw data file not found: {raw_data_path}")
+
+    target_date = _target_date_from_filename(raw_data_path)
+
+    frames: list[pd.DataFrame] = []
+    if target_date is None:
+        # Non-DAG usage (e.g. tests against a sample file): just read it.
+        frame = pd.read_csv(raw_data_path)
+        if not frame.empty:
+            frames.append(frame)
+    else:
+        raw_dir = raw_data_path.parent
+        for offset in range(_HISTORY_DAYS, -1, -1):
+            d = target_date - timedelta(days=offset)
+            candidate = raw_dir / f"pm25_{d.strftime('%Y-%m-%d')}.csv"
+            if not candidate.exists():
+                continue
+            frame = pd.read_csv(candidate)
+            if frame.empty:
+                continue
+            frames.append(frame)
+
+    if not frames:
+        raise ValueError(f"No usable raw CSVs found at or before {raw_data_path}")
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined = combined.drop_duplicates(
+        subset=["location_id", "timestamp"], keep="last"
+    ).reset_index(drop=True)
+    return combined
+
+
 def build_features(raw_data_path: Path, output_path: Path) -> str:
     """
         Builds hourly air-quality features for raw PM2.5 data
-        
-        Args: 
+
+        Args:
             raw_data_path: Path to the raw ingest CSV file.
             output_path: Path where the transformed feature CSV will be written
-            
+
         Returns:
             String path to the output file in include/data/features/features_{YYYY-MM-DD}.csv
-            
-        Raises: 
+
+        Raises:
             ValueError: if the input data is empty, missing required columns or cannot be transformed
-    
+
     """
-    # Load the raw ingest output from disk so this task stays file-based for Airflow XComs.
-    raw_data_df = pd.read_csv(raw_data_path)
+    # Concatenate the target day's CSV with prior days' CSVs from the same
+    # directory so lag/rolling features have the history they need.
+    raw_data_df = _gather_raw_history(Path(raw_data_path))
     if raw_data_df.empty:
-        raise ValueError(f"Raw data file is empty: {raw_data_path}")
+        raise ValueError(f"Raw data history is empty: {raw_data_path}")
 
     # Validate the input schema and normalize the timestamp column before feature engineering starts.
     validated_df = validation_helper(raw_data_df)

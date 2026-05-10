@@ -35,6 +35,8 @@ These values are fixed and must be identical everywhere they appear in the codeb
 | `OPENAQ_PM25_PARAMETER_ID` | `2` | `ingest.py` |
 | `DATETIME_COL` | `"timestamp"` | `ingest.py`, `transform.py` |
 | `TARGET_LOCATIONS` | `{"red_butte": <id>, "smithfield": <id>, "ledges": <id>}` | `ingest.py`, `train.py`, `serve.py` |
+| `F1_RETRAIN_THRESHOLD` | `0.70` | `dags/airalert_dag.py`, `constants.py` |
+| `WEEKLY_RETRAIN_WEEKDAY` | `0` (Monday) | `dags/airalert_dag.py`, `constants.py` |
 
 > **Timezone rule:** All datetime values in this pipeline are stored in UTC. OpenAQ returns timestamps in UTC natively (`period.datetimeFrom.utc`). Any additional constants that emerge from your design decisions should be added here once decided.
 
@@ -120,9 +122,9 @@ When we have a sensor off, and do not have any information on that row, we then 
 - How would you know your model has gotten worse? Do you have access to ground truth labels on live data to compute a performance metric after deployment?
 - What is the cost of a false negative (predicting safe when air is actually unsafe), and what F1 floor reflects that cost?
 
-**Your decision:** We want to retrain the model weekly, with a trigger on missing true positives.
+**Your decision:** We are going to be training the model every week, and triggering a re-train based on our F1 metric.
 
-**Your reasoning:** We will be predicting daily air safety, because of this, the next day we will know if we were right or wrong. when we pull the data, we want to look at the previous prediction, and then see if it was correct or not. If it missed a true positive (did not predict bad weather, when it was) then we will trigger a retrain. If this were to not happen, then we would schedule the model to retrain at the begining of each week. So when we pull the data on monday morning at 6 am, we will also trigger a retrain. Basically, we will train it no matter what, each monday, when we pull new data. Then, if we miss any true positives then we will retrain the model to ensure we have more accuracy in the future.
+**Your reasoning:** We decided to train our model every monday morning, to ensure that the data is current, so we can highlight any recent trends. Ensuring the model is consistently seeing new data is very important, because trends change as time goes on, so capturing these is very important to making predictions that dont just show high accuracy in training, but in the real world. We also want to trigger a re-train any time our F1 metric falls below .70, we wanted to ensure the model is accurate, can make predictions that do not fall below picking at random, and is unbiased towards the data. We originally were going to track false negatives, or the precision score, due to the importance of producing accurate predictions for non clean air. If we predict the air to be clean, someone with asthma or chronic illness could be put in danger from this prediction being incorrect. So, off instinct it made the most sense to track a metric that directly correlates to our core prinsipals. But, we also realized the bias this would introduce. We could train a model with 100 percent accuracy, but it could skew heavily towards predicting the air is un-safe, when reality does not reflect this. Due to the stability, and reduced bias, monitoring the F1 score is the most rational decision, and one that we believe will lead to a more reliable model.
 
 
 ---
@@ -356,3 +358,4 @@ When you update this document mid-project, record it here.
 | Date | What changed | Why | Both partners agreed? |
 |---|---|---|---|
 | 2026-05-04 | Initial commit of finalized contracts and decisions; renamed from template; unified naming convention; removed weather/Open-Meteo references; locked three per-location models | Lock in W5D4 design decisions and reconcile mock CSV with contracts | Yes |
+| 2026-05-09 | Decision 3 wired into the DAG: `retrain_model` evaluates per-location F1 against a 0.70 floor; Monday 06:00 UTC is the unconditional weekly backstop; non-retrained locations carry forward their existing estimator and metrics. Added `F1_RETRAIN_THRESHOLD` and `WEEKLY_RETRAIN_WEEKDAY` to Shared Constants. Source-of-truth design lives in `docs/retrain_trigger_implementation_plan.md`. | W5 named the trigger but the DAG was always retraining all three locations; W6A1 explicitly requires F1 on the unsafe class with a threshold tied to the public-health cost of false negatives. | Yes |
