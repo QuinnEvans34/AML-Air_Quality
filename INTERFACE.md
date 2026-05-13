@@ -194,10 +194,9 @@ Aggregating to one row per hour per location leads to much cleaner data processi
 - Does your chosen model's `predict_proba` output produce well-calibrated probabilities, or do they cluster near 0 and 1 in a way that would mislead a user reading a confidence score?
 - What does `unsafe_probability = 0.72` actually mean to someone using the dashboard — and is your model's output trustworthy enough to display that number?
 
-**Your decision:**
+We will be training a logical regression model, which calculates a probability score directly.
 
-**Your reasoning:**
-
+We have been using a logical regression model through out the development of this project. It has already given us high accuracy and works great with the use case of this project. It is a binary classifier, which directly corresponds with the "safe" vs "unsafe" and also returns a probablity, which can be used directly inside our dashboard for our certainty score. For our stakeholder, we are looking specifically at elementary schools. If the air is unsafe, then students should have indoor recess, if it is clean then they should go out. We are going to classify each prediction, if we are above .70 for a prediction, we will say "high" for certainty, if we are in the range of 40 - 69 then we will classify this as "medium" and anything below 40 will be "low". So, for the case of .72, we would say this is high certainty for our prediction. We are leaning towards being as safe as possible, ensuring that the predictions are ensuring students stay inside if the air quality is predicted to be low. 
 ---
 
 ### Decision 8 — How the dashboard sources input data
@@ -209,9 +208,9 @@ Aggregating to one row per hour per location leads to much cleaner data processi
 - Can a non-technical user reasonably be expected to know their local PM2.5 lag values, and if not, what does that mean for the usability of manual entry?
 - What failure modes does each approach introduce, and which tradeoff is most acceptable given your serving architecture?
 
-**Your decision:**
+We are going to be using fastAPI, caching our model, and using m_time to ensure the model is up to date.
 
-**Your reasoning:**
+We want to use fastAPI to ensure that we can use our predictions with low latency, ensuring we do not have to load the model each time that we make a prediciton. To ensure this we are also using a chached model, when we train a new model, we will keep this in the cache to ensure that we only have to load it one time. We will also be usitilizing m_time to ensure that we load the most current model, and will gate it, so the file is only accessible after it has been fully trained, to ensure there is nevery any corrupted data.
 
 ---
 
