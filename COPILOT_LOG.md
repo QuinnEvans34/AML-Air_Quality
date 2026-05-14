@@ -221,3 +221,175 @@ Added comments throughout to explain why each piece exists and kept the API alig
 > §"Test scenarios" and §"Rubric impact" tables in the plan.
 
 **Summary:** [to be filled in after implementation]
+
+---
+
+## Entry 7 — QE — 2026-05-14
+**Module:** `include/src/train.py` (promotion block + module-level logger), `INTERFACE.md` (Decision 7 calibration append, Decision 8 full write-up, two Change Log rows). Branch: `feat/dashboard`.
+
+**Prompt sent to Claude:**
+
+> Implement the W7A1 dashboard foundation: the `train.py` Production
+> promotion fix AND the Decision 7 + Decision 8 INTERFACE.md polish.
+> Follow the strict outlines at
+> `docs/serve_production_promotion_plan.md` and
+> `docs/phase_2_interface_md_patch.md` exactly — those documents are
+> the source of truth for every code block, every paragraph of prose,
+> the test scenarios, and the cross-review checklist coverage.
+>
+> Scope of this PR is **the train.py promotion + INTERFACE.md polish
+> only.** Do not start the dashboard (Phase 3 lives in Entry 8), do
+> not touch `serve.py`, do not extend Contract 4, do not compute the
+> naive baseline, and do not write the final PR description. Those
+> are separate W7A1 phases.
+>
+> The two files that change in this PR — and only these two:
+>
+> 1. **`include/src/train.py`** — apply both edits from §"Files
+>    that change" §1 of `docs/serve_production_promotion_plan.md`:
+>    - **1a.** Move `logger = logging.getLogger(__name__)` to module
+>      top so `log_run_to_mlflow` and `retrain_task` share one
+>      logger. Remove the duplicate definition inside `retrain_task`.
+>    - **1b.** Add the Production promotion block to
+>      `log_run_to_mlflow` immediately after the existing
+>      `mlflow.sklearn.log_model(...)` call. Use the lazy import
+>      pattern (`from mlflow.tracking import MlflowClient` inside
+>      the function, not at module top). Wrap in try/except so
+>      registry hiccups log a warning but never break the training
+>      run. Match the best-effort message style of the existing
+>      MLflow warning in `retrain_task`.
+>
+> 2. **`INTERFACE.md`** — apply two patches:
+>    - **2a.** Apply all three blocks from
+>      `docs/phase_2_interface_md_patch.md`: append the calibration
+>      paragraph to Decision 7 reasoning, replace Decision 8
+>      reasoning wholesale with the Next.js + recent-pattern
+>      write-up, and append the 2026-05-14 Decision 7+8 Change Log
+>      row.
+>    - **2b.** Append the 2026-05-14 Change Log row from §"Files
+>      that change" §2 of `docs/serve_production_promotion_plan.md`
+>      (the train.py promotion row). Place it below the Phase 2
+>      row from 2a.
+>    - Delete `docs/phase_2_interface_md_patch.md` in the same
+>      commit — it is a staging doc that should not survive past the
+>      patch being applied.
+>
+> Do not modify any other file. Do not touch `ingest.py`,
+> `transform.py`, `serve.py`, `drift.py`, `constants.py`, the DAG,
+> the contracts (Contracts 1/2/3/4 are unchanged), the existing
+> Decisions 1–6, tests, README, setup guides, or scripts. Do not
+> introduce new dependencies.
+>
+> Conventions from `.github/copilot-instructions.md` apply: type-
+> hinted signatures, Args/Returns/Raises docstrings on every new or
+> modified function, `pathlib.Path` for any new file paths, best-
+> effort MLflow handling honoring `AIRALERT_SKIP_MLFLOW`.
+>
+> After implementation, the file set must satisfy every row of the
+> §"Test scenarios" and §"Rubric impact" tables in the promotion
+> plan. Run `python -m py_compile include/src/train.py` to confirm
+> the file parses cleanly.
+
+**Summary:** [to be filled in after implementation]
+
+---
+
+## Entry 8 — QE + GJ — 2026-05-14
+**Module:** `app/dashboard/` (new Next.js project), `INTERFACE.md` (Phase 3 Change Log row only). Branch: `feat/dashboard`.
+
+**Prompt sent to Claude:**
+
+> Build the AirAlert dashboard at `app/dashboard/` as a Next.js +
+> React + Tailwind project (W7A1 Part 4). Follow the strict outline
+> at `docs/dashboard_implementation_plan.md` exactly — that document
+> is the source of truth for the directory layout, every API route
+> contract, the feature-prep algorithm, the UI flow, the plain-
+> language headline logic, the trend chart spec, the constants
+> mirror, and the cross-review checklist coverage.
+>
+> Pre-requisites for this prompt (must be merged on `feat/dashboard`
+> before this work starts):
+> - Entry 7 (Phase 1a + Phase 2) is committed: `train.py` promotes
+>   newly registered model versions to MLflow's Production stage,
+>   AND `INTERFACE.md` has the finalized Decision 7 calibration
+>   paragraph and Decision 8 full write-up. The dashboard
+>   implementation reads from `INTERFACE.md` to know what `is_unsafe`
+>   and `unsafe_probability` actually mean and where the user-
+>   visible high/medium/low buckets come from.
+> - Drift detection commits are merged into `feat/dashboard` (already
+>   done via the `git merge feature/drift-detection` step).
+>
+> Scope of this PR is **the dashboard implementation only.** Do not
+> touch `ingest.py`, `transform.py`, `train.py` (Phase 1a already
+> shipped in Entry 7), `drift.py`, `constants.py`, the DAG, or
+> `serve.py`. `serve.py` is Gracelyn's file and stays exactly as
+> she wrote it — the dashboard renders against the W6 `/health`
+> three-field response shape (`status`, `model_name`, `stage`) and
+> POSTs to `/predict` per Contract 4 unchanged.
+>
+> The files that change in this PR — and only these:
+>
+> 1. **`app/dashboard/`** — new Next.js project per §"Files that
+>    change" §1 of `docs/dashboard_implementation_plan.md`.
+>    Bootstrap with `create-next-app`, TypeScript + Tailwind, app
+>    router, no src dir, no import alias. Implement every component,
+>    every API route, every lib file in the directory tree the plan
+>    documents. Use the exact dependency list from the plan's
+>    `package.json` block — do not add new packages without a
+>    written reason in the PR description.
+>
+> 2. **`app/dashboard/lib/constants.ts`** — mirror of the subset of
+>    `include/src/constants.py` listed in §"Constants kept in sync"
+>    of the plan. Add a header comment naming the Python file as the
+>    source of truth and instructing future readers to update both
+>    copies together.
+>
+> 3. **`INTERFACE.md`** — add ONE Phase-3 Change Log entry per
+>    §"Files that change" §3 of the plan. The Decision 7 and
+>    Decision 8 reasoning text MUST NOT be edited in this PR — that
+>    work was done in Entry 7. Touching it here would create a merge
+>    conflict and confuse the cross-review reviewer.
+>
+> Do not modify any other file. Conventions from
+> `.github/copilot-instructions.md` apply to the Python side; the
+> TypeScript side follows Next.js + Tailwind community conventions
+> (functional components with TS, no class components; no inline
+> styles, Tailwind classes; named exports for components; one
+> component per file).
+>
+> Three specific design points the plan calls out that need to be
+> implemented carefully:
+>
+> - **The browser never talks to FastAPI directly.** All three
+>   routes under `app/dashboard/app/api/` (`health`, `predict`,
+>   `features`) are the only thing that talks to FastAPI or to the
+>   filesystem. The browser side only ever fetches
+>   `/api/{health,predict,features}` — never `localhost:8000`
+>   directly. This is why we do NOT add CORS middleware to
+>   `serve.py`.
+>
+> - **The plain-language headline is not optional.** Implement the
+>   `plainLanguageHeadline` function from §"Plain-language headline
+>   logic" of the plan precisely — group consecutive unsafe hours
+>   into ranges, name the location in the sentence, produce a
+>   recommendation ("indoor recess" / "outdoor activities should be
+>   fine"). The W7A1 rubric is explicit that "`is_unsafe: 1` is not
+>   sufficient." High/medium/low confidence buckets must match
+>   Decision 7's thresholds (≥0.70 / ≥0.40 / <0.40).
+>
+> - **The recent-pattern feature prep follows Decision 8 exactly.**
+>   Implement the algorithm from §"Feature-prep algorithm" of the
+>   plan: actual-or-pattern fallback per lag hour, hour-of-day mean
+>   for future dates, `inconclusive` flag when fewer than 7
+>   observations are available for the target hour. The lookup
+>   window is `REFERENCE_WINDOW_DAYS = 14` days of raw history.
+>
+> After implementation, the project must satisfy every row of the
+> §"Test scenarios" and §"Rubric impact" tables in the plan. The
+> final smoke test must include: cold start with all three services
+> running (Airflow producing data, FastAPI on :8000, Next.js on
+> :3000) plus making at least one prediction through the UI for a
+> future date and confirming the plain-language headline renders
+> sensibly.
+
+**Summary:** [to be filled in after implementation]
