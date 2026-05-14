@@ -11,6 +11,7 @@ Pipeline (linear chain — TaskFlow API):
     fetch_air_quality        ->  include/data/raw/pm25_{ds}.csv
     validate_schema          ->  pass-through (Contract 1 assertions)
     engineer_features        ->  include/data/features/features_{ds}.csv
+    check_drift              ->  include/data/drift/drift_{ds}.json
     retrain_model            ->  metrics dict in XCom + model artifacts on disk
 
 Each task pulls the execution date from get_current_context()["ds"] and
@@ -33,6 +34,7 @@ from airflow.operators.python import get_current_context
 
 RAW_DATA_DIR      = Path("include/data/raw")
 FEATURES_DATA_DIR = Path("include/data/features")
+DRIFT_DATA_DIR    = Path("include/data/drift")
 MODELS_DIR        = Path("include/models")
 
 
@@ -52,7 +54,30 @@ def _read_latest_metrics() -> dict | None:
         return None
 
 
-def _per_location_decisions(ds: str) -> dict[str, tuple[bool, str]]:
+def _read_drift_verdicts(drift_path: str) -> dict[str, dict]:
+    """
+    Load the per-location drift verdict block from ``drift_{ds}.json``.
+
+    Returns:
+        Dict mapping each ``TARGET_LOCATIONS`` key to its per-location
+        verdict sub-dict (with at least the ``drifted`` and
+        ``mean_shift_sigma`` keys). Empty dict on a missing or corrupt
+        file — in that case the caller falls back to the pre-drift
+        decision logic, so a drift-task hiccup never blocks retrain.
+    """
+    path = Path(drift_path)
+    if not path.exists():
+        return {}
+    try:
+        return dict(json.loads(path.read_text()).get("per_location") or {})
+    except Exception:  # noqa: BLE001 — corrupt file → treat as empty
+        return {}
+
+
+def _per_location_decisions(
+    ds: str,
+    drift_verdicts: dict[str, dict] | None = None,
+) -> dict[str, tuple[bool, str]]:
     """
     Apply Decision 3 per location.
 
@@ -62,10 +87,19 @@ def _per_location_decisions(ds: str) -> dict[str, tuple[bool, str]]:
     1. Monday → retrain (weekly backstop).
     2. No previous metrics file at all → retrain (bootstrap).
     3. No previous per-location entry for this location → retrain (bootstrap).
-    4. Previous F1 < ``F1_RETRAIN_THRESHOLD`` → retrain.
-    5. Otherwise → skip.
+    4. Drift verdict ``drifted == True`` for this location → retrain.
+    5. Previous F1 < ``F1_RETRAIN_THRESHOLD`` → retrain.
+    6. Otherwise → skip.
+
+    Args:
+        ds: YYYY-MM-DD execution date string.
+        drift_verdicts: Per-location drift verdict sub-dict from
+            ``include/data/drift/drift_{ds}.json``. ``None`` or ``{}``
+            disables the drift trigger and reverts to the W6 four-rule
+            precedence (Monday → bootstrap → F1 → skip).
     """
     from include.src.constants import (
+        DRIFT_SIGMA_THRESHOLD,
         F1_RETRAIN_THRESHOLD,
         TARGET_LOCATIONS,
         WEEKLY_RETRAIN_WEEKDAY,
@@ -76,6 +110,7 @@ def _per_location_decisions(ds: str) -> dict[str, tuple[bool, str]]:
     )
     prev = _read_latest_metrics() or {}
     prev_per_loc = prev.get("per_location") or {}
+    drift_verdicts = drift_verdicts or {}
 
     decisions: dict[str, tuple[bool, str]] = {}
     for loc_key in TARGET_LOCATIONS:
@@ -90,6 +125,14 @@ def _per_location_decisions(ds: str) -> dict[str, tuple[bool, str]]:
                 True, f"bootstrap (no prior {loc_key} metrics)"
             )
             continue
+        loc_drift = drift_verdicts.get(loc_key) or {}
+        if loc_drift.get("drifted"):
+            sigma = float(loc_drift.get("mean_shift_sigma", 0.0))
+            decisions[loc_key] = (
+                True,
+                f"drift sigma={sigma:.2f} > threshold {DRIFT_SIGMA_THRESHOLD}",
+            )
+            continue
         f1 = float(prev_per_loc[loc_key].get("f1", 0.0))
         if f1 < F1_RETRAIN_THRESHOLD:
             decisions[loc_key] = (
@@ -97,9 +140,13 @@ def _per_location_decisions(ds: str) -> dict[str, tuple[bool, str]]:
                 f"prior f1={f1:.3f} < threshold {F1_RETRAIN_THRESHOLD}",
             )
         else:
+            sigma = float(loc_drift.get("mean_shift_sigma", 0.0))
             decisions[loc_key] = (
                 False,
-                f"prior f1={f1:.3f} ≥ threshold {F1_RETRAIN_THRESHOLD}",
+                (
+                    f"prior f1={f1:.3f} ≥ threshold {F1_RETRAIN_THRESHOLD} "
+                    f"and drift sigma={sigma:.2f} within ±{DRIFT_SIGMA_THRESHOLD}"
+                ),
             )
     return decisions
 
@@ -212,7 +259,51 @@ def airalert_pipeline():
         )
 
     @task
-    def retrain_model(features_path: str) -> dict:
+    def check_drift(features_path: str) -> str:
+        """
+        Compute per-location PM2.5 drift verdicts and persist them.
+
+        Drift compares a recent window of raw pm25 (today's
+        ``pm25_{ds}.csv``) against a reference window of raw pm25
+        (the prior ``DRIFT_REFERENCE_DAYS`` days). Per-location verdicts
+        are written to ``include/data/drift/drift_{ds}.json`` and the
+        ``mean_shift_sigma`` plus boolean ``drifted`` flags are logged
+        to MLflow under run name ``drift_{ds}``. See
+        ``docs/drift_implementation_plan.md`` for the full design.
+
+        Args:
+            features_path: Upstream XCom path string from
+                ``engineer_features``. Used only to enforce DAG ordering
+                — the drift computation reads raw pm25 directly, not
+                the engineered features CSV.
+
+        Returns:
+            Absolute path string to
+            ``include/data/drift/drift_{ds}.json``.
+
+        Idempotency:
+            Skips work when ``include/data/drift/drift_{ds}.json``
+            already exists. Delete the file to force a re-run.
+
+        Raises:
+            FileNotFoundError: today's raw file
+                ``include/data/raw/pm25_{ds}.csv`` is missing
+                (raised inside ``drift_check_task``).
+            ValueError: ``ds`` is not YYYY-MM-DD
+                (raised inside ``drift_check_task``).
+        """
+        ctx = get_current_context()
+        ds = ctx["ds"]
+        output_path = DRIFT_DATA_DIR / f"drift_{ds}.json"
+
+        if output_path.exists():
+            return str(output_path)
+
+        from include.src.drift import drift_check_task
+        return drift_check_task(ds=ds)
+
+    @task
+    def retrain_model(features_path: str, drift_path: str) -> dict:
         """
         Apply Decision 3 and (re)train per-location classifiers as needed.
 
@@ -231,6 +322,10 @@ def airalert_pipeline():
 
         Args:
             features_path: file path string from engineer_features.
+            drift_path:    file path string from check_drift; parsed
+                           into a per-location verdict dict and fed to
+                           ``_per_location_decisions`` so drift can
+                           force a retrain (precedence rule 4).
 
         Returns:
             Aggregated metrics dict with rubric-required top-level keys
@@ -261,7 +356,8 @@ def airalert_pipeline():
                      metrics_path, bundle_path)
             return json.loads(metrics_path.read_text())
 
-        decisions = _per_location_decisions(ds)
+        drift_verdicts = _read_drift_verdicts(drift_path)
+        decisions = _per_location_decisions(ds, drift_verdicts=drift_verdicts)
         locations_to_retrain = [
             loc for loc, (retrain, _) in decisions.items() if retrain
         ]
@@ -292,7 +388,8 @@ def airalert_pipeline():
     raw       = fetch_air_quality()
     validated = validate_schema(raw)
     features  = engineer_features(validated)
-    retrain_model(features)
+    drift     = check_drift(features)
+    retrain_model(features, drift)
 
 
 airalert_pipeline()

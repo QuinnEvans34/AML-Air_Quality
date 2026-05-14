@@ -51,6 +51,30 @@ F1_RETRAIN_THRESHOLD: float = 0.70
 # F1 stays just above the threshold.
 WEEKLY_RETRAIN_WEEKDAY: int = 0
 
+# Decision 3 — drift detection (W7A1).
+# Per-location absolute mean-shift sigma above this threshold trips the
+# drift verdict, which is the third retrain trigger alongside the Monday
+# backstop and the F1 < F1_RETRAIN_THRESHOLD floor. 2.0 is the leading-
+# indicator partner to the 0.70 F1 lagging-indicator floor: 2σ catches the
+# upstream covariate shift before downstream F1 has collapsed, while F1 <
+# 0.70 catches outcome degradation that drift alone might not surface
+# (e.g. distribution stable but label boundary mis-calibrated). The two
+# triggers overlap deliberately. See INTERFACE.md Decision 3 reasoning
+# and docs/drift_implementation_plan.md.
+DRIFT_SIGMA_THRESHOLD: float = 2.0
+
+# Number of prior days of raw PM2.5 data that form the reference
+# distribution for the drift check. 7 matches the rolling window
+# ``transform.py`` uses to build features (``_HISTORY_DAYS = 7``), so
+# drift compares against the same span of raw data the model was
+# actually trained on.
+DRIFT_REFERENCE_DAYS: int = 7
+
+# Number of days of raw PM2.5 data that form the recent window. 1 = just
+# today; aligns with the daily DAG cadence and gives the drift task a
+# ~24-row recent window per location.
+DRIFT_RECENT_DAYS: int = 1
+
 # Target locations — OpenAQ location_id values to be filled in once we
 # query /v3/locations to identify the three named Utah sites. None
 # placeholders let downstream code import this dict; any function that

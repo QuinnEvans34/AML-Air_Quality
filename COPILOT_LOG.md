@@ -139,3 +139,85 @@ Added the module docstring, request/response schemas, cache state, helper functi
 Used logistic regression probabilities directly as the dashboard certainty score per Decision 7.
 Kept model loading cached in memory and added an mtime-based refresh check so the app does not reload on every request.
 Added comments throughout to explain why each piece exists and kept the API aligned with the serving contract.
+
+---
+
+## Entry 6 — QE — 2026-05-14
+**Module:** `include/src/drift.py` (new), `dags/airalert_dag.py` (revised), `include/src/constants.py` (additive), `INTERFACE.md` (Decision 3 + Shared Constants + Change Log)
+
+**Prompt sent to Claude:**
+
+> Implement drift detection for the AirAlert pipeline (W7A1 Part 2).
+> Follow the strict outline at `docs/drift_implementation_plan.md`
+> exactly — that document is the source of truth for the file structure,
+> every function signature, every module-level constant, the per-location
+> decision precedence table, the drift verdict JSON shape, the MLflow run
+> shape, the test scenarios, and the cross-review checklist coverage.
+>
+> Scope of this PR is **drift detection only**. Do not touch `serve.py`,
+> do not create `app/dashboard.py`, do not edit Decision 7 or Decision 8
+> reasoning, do not compute the naive baseline F1, and do not write the
+> final PR description. Those are separate W7A1 workstreams.
+>
+> The four files that change in this PR — and only these four:
+>
+> 1. **`include/src/constants.py`** — add the three new constants
+>    (`DRIFT_SIGMA_THRESHOLD = 2.0`, `DRIFT_REFERENCE_DAYS = 7`,
+>    `DRIFT_RECENT_DAYS = 1`) per §"Files that change" §1 of the plan.
+>    Match the inline-comment style of `F1_RETRAIN_THRESHOLD` and
+>    `WEEKLY_RETRAIN_WEEKDAY` already in that file.
+>
+> 2. **`include/src/drift.py`** — new module per §"Files that change"
+>    §2 of the plan. Module docstring (cite Decision 3 and W7A1 Part 2),
+>    lazy imports for `mlflow` and `numpy` where it makes sense (match
+>    the lazy-import pattern from `train.py`), and the five functions
+>    listed in the plan with full Args/Returns/Raises docstrings. The
+>    public entry point is `drift_check_task(ds: str) -> str`, which is
+>    what the DAG imports.
+>
+> 3. **`dags/airalert_dag.py`** — revisions per §"Files that change"
+>    §3 of the plan:
+>    - Add `DRIFT_DATA_DIR = Path("include/data/drift")` near the other
+>      path constants.
+>    - Insert the new `check_drift` task between `engineer_features`
+>      and `retrain_model`. Use the file-exists idempotency pattern
+>      that `fetch_air_quality` and `engineer_features` already use.
+>    - Update `_per_location_decisions` to accept the new
+>      `drift_verdicts: dict[str, bool]` argument and apply precedence
+>      rule 4 from the plan (drift > 2.0σ → retrain) between bootstrap
+>      and the F1 < 0.70 check.
+>    - Update `retrain_model` to take `drift_path: str` as a second
+>      argument, parse the drift JSON, build the verdict dict, and
+>      pass it into `_per_location_decisions`. Preserve every existing
+>      W6 idempotency, bootstrap-fallback, MLflow best-effort, and
+>      audit-trail guarantee — drift only adds a new reason string to
+>      `retrain_decisions[loc].reason`; it does not change the metrics
+>      dict shape.
+>    - Wire the 5-task chain at the bottom exactly as shown in the
+>      plan's Architecture diagram.
+>
+> 4. **`INTERFACE.md`** — Decision 3 reasoning gets an appended
+>    paragraph documenting the 2σ threshold and the leading-vs-lagging
+>    consistency argument (do not rewrite or remove the existing F1
+>    reasoning — drift is layered on top of it). Shared Constants table
+>    gets the three new rows from §"Files that change" §4 of the plan.
+>    Change Log gets the 2026-05-14 entry. Do not edit Decision 7 or
+>    Decision 8 in this PR.
+>
+> Do not modify any other file in the repo. Do not edit `ingest.py`,
+> `transform.py`, `train.py`, `serve.py`, the contracts, the
+> retrain_trigger_implementation_plan.md doc, the tests, the README,
+> the setup guides, or any scripts. Do not introduce new dependencies
+> beyond `numpy` and `mlflow` (both already in `requirements.txt`).
+>
+> Constraints from the project conventions in
+> `.github/copilot-instructions.md` apply: every function gets a type-
+> hinted signature and Args/Returns/Raises docstring; the DAG task
+> returns a file path string, never a DataFrame; `pathlib.Path` for all
+> file paths; meaningful exceptions on failure; MLflow logging is
+> best-effort and honors `AIRALERT_SKIP_MLFLOW`.
+>
+> After implementation, the file set must satisfy every row of the
+> §"Test scenarios" and §"Rubric impact" tables in the plan.
+
+**Summary:** [to be filled in after implementation]
