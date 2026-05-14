@@ -124,3 +124,18 @@
 > outside `include/src/ingest.py` itself.
 
 **Summary:** This prompt included the full implementation of our ingest.py file, we had already filled out the doc strings, and corresponding MD file, so this acutally implemented the code necessary for it to run. 
+
+---
+
+## Entry 5 — GJ — 2026-05-14
+**Module:** `include/src/serve.py`
+
+**Prompt sent to Claude:**
+
+> Build out `include/src/serve.py` as the FastAPI serving layer for AirAlert. Start with a module docstring, then add documented Pydantic request/response schemas, a cache/state class, helper functions, startup lifespan logic, and the `/health` and `/predict` endpoints. Keep the file thin, cache models in memory, use an mtime-based refresh check, and add comments explaining the what and why for each section.
+
+**Summary:** Created the serving layer skeleton and then filled it into a thin FastAPI service for the dashboard.
+Added the module docstring, request/response schemas, cache state, helper functions, startup lifespan, and both endpoints.
+Used logistic regression probabilities directly as the dashboard certainty score per Decision 7.
+Kept model loading cached in memory and added an mtime-based refresh check so the app does not reload on every request.
+Added comments throughout to explain why each piece exists and kept the API aligned with the serving contract.
