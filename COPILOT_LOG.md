@@ -224,46 +224,329 @@ Added comments throughout to explain why each piece exists and kept the API alig
 
 ---
 
-## Entry 7 — GJ — 2026-05-05
-**Module:** `include/src/transform.py` (commit 1 of 2 — signatures + docstrings)
+## Entry 7 — QE — 2026-05-14
+**Module:** `include/src/train.py` (promotion block + module-level logger), `INTERFACE.md` (Decision 7 calibration append, Decision 8 full write-up, two Change Log rows). Branch: `feat/dashboard`.
 
 **Prompt sent to Claude:**
 
-> Create `include/src/transform.py` for the AirAlert pipeline. Follow the
-> strict outline at `docs/transform_implementation_plan.md` exactly — that
-> document is the source of truth for the module's public API, the required
-> lag and rolling-window semantics, and the contract with `ingest.py` and
-> `train.py` (Contract 1 and Contract 2). Produce the module docstring,
-> imports, module-level constants, and the typed function signatures with
-> full Args/Returns/Raises docstrings. Do not implement function bodies in
-> this commit; function bodies will be added in a follow-up commit.
+> Implement the W7A1 dashboard foundation: the `train.py` Production
+> promotion fix AND the Decision 7 + Decision 8 INTERFACE.md polish.
+> Follow the strict outlines at
+> `docs/serve_production_promotion_plan.md` and
+> `docs/phase_2_interface_md_patch.md` exactly — those documents are
+> the source of truth for every code block, every paragraph of prose,
+> the test scenarios, and the cross-review checklist coverage.
+>
+> Scope of this PR is **the train.py promotion + INTERFACE.md polish
+> only.** Do not start the dashboard (Phase 3 lives in Entry 8), do
+> not touch `serve.py`, do not extend Contract 4, do not compute the
+> naive baseline, and do not write the final PR description. Those
+> are separate W7A1 phases.
+>
+> The two files that change in this PR — and only these two:
+>
+> 1. **`include/src/train.py`** — apply both edits from §"Files
+>    that change" §1 of `docs/serve_production_promotion_plan.md`:
+>    - **1a.** Move `logger = logging.getLogger(__name__)` to module
+>      top so `log_run_to_mlflow` and `retrain_task` share one
+>      logger. Remove the duplicate definition inside `retrain_task`.
+>    - **1b.** Add the Production promotion block to
+>      `log_run_to_mlflow` immediately after the existing
+>      `mlflow.sklearn.log_model(...)` call. Use the lazy import
+>      pattern (`from mlflow.tracking import MlflowClient` inside
+>      the function, not at module top). Wrap in try/except so
+>      registry hiccups log a warning but never break the training
+>      run. Match the best-effort message style of the existing
+>      MLflow warning in `retrain_task`.
+>
+> 2. **`INTERFACE.md`** — apply two patches:
+>    - **2a.** Apply all three blocks from
+>      `docs/phase_2_interface_md_patch.md`: append the calibration
+>      paragraph to Decision 7 reasoning, replace Decision 8
+>      reasoning wholesale with the Next.js + recent-pattern
+>      write-up, and append the 2026-05-14 Decision 7+8 Change Log
+>      row.
+>    - **2b.** Append the 2026-05-14 Change Log row from §"Files
+>      that change" §2 of `docs/serve_production_promotion_plan.md`
+>      (the train.py promotion row). Place it below the Phase 2
+>      row from 2a.
+>    - Delete `docs/phase_2_interface_md_patch.md` in the same
+>      commit — it is a staging doc that should not survive past the
+>      patch being applied.
+>
+> Do not modify any other file. Do not touch `ingest.py`,
+> `transform.py`, `serve.py`, `drift.py`, `constants.py`, the DAG,
+> the contracts (Contracts 1/2/3/4 are unchanged), the existing
+> Decisions 1–6, tests, README, setup guides, or scripts. Do not
+> introduce new dependencies.
+>
+> Conventions from `.github/copilot-instructions.md` apply: type-
+> hinted signatures, Args/Returns/Raises docstrings on every new or
+> modified function, `pathlib.Path` for any new file paths, best-
+> effort MLflow handling honoring `AIRALERT_SKIP_MLFLOW`.
+>
+> After implementation, the file set must satisfy every row of the
+> §"Test scenarios" and §"Rubric impact" tables in the promotion
+> plan. Run `python -m py_compile include/src/train.py` to confirm
+> the file parses cleanly.
 
-**Summary:** Added the `transform.py` module scaffold: module-level
-documentation, typed function signatures (`validation_helper`, `lag_feature`,
-`rolling_feature`, `date_feature`, `_gather_raw_history`, and `build_features`),
-and contract-oriented docstrings. This commit intentionally left bodies for a
-later implementation pass to preserve incremental reviewability.
+**Summary:** [to be filled in after implementation]
 
 ---
 
-## Entry 8 — GJ — 2026-05-09
-**Module:** `include/src/transform.py` (commit 2 of 2 — function bodies)
+## Entry 8 — QE + GJ — 2026-05-14
+**Module:** `app/dashboard/` (Next.js project skeleton + lib functions, sub-phases 3a–3b). Branch: `feat/dashboard`.
+
+> **Note (revised 2026-05-14):** Entry 8 originally covered the entire
+> dashboard implementation. After sub-phases 3a (project skeleton) and
+> 3b (lib functions: `readRawCsv.ts`, `featurePrep.ts`,
+> `plainLanguage.ts`, `api.ts`, plus `constants.ts` and `types.ts`)
+> shipped, the remaining UI work (sub-phases 3c API routes, 3d
+> components, 3e page composition) was split into Entry 9 below so the
+> visual design decisions agreed on after sub-phase 3b — the
+> three-color verdict strip, glyph reinforcement, plain-language
+> headline grouping — could be captured in their own dedicated UI
+> spec (`docs/dashboard_ui_spec.md`) and the prompt grader would have
+> a single self-contained reference for the UI surface.
+>
+> Entry 8 above remains the source-of-truth prompt for what already
+> shipped (skeleton + lib). Entry 9 below is the source-of-truth
+> prompt for what ships next (API routes + components + composition).
 
 **Prompt sent to Claude:**
 
-> Fill in the function bodies of `include/src/transform.py` per
-> `docs/transform_implementation_plan.md`. Implement validation of the raw
-> schema, UTC timestamp parsing, per-`location_id` sorting, lag features
-> (1h, 3h, 24h), 3-hour rolling mean/std excluding the current hour, temporal
-> features (`hour_of_day`, `day_of_week`, `month_of_year`, `is_weekend`),
-> `is_unsafe` target creation using the `UNSAFE_THRESHOLD`, and the final
-> contract-limited CSV output. Use `pathlib.Path` for paths and raise
-> meaningful `ValueError`/`FileNotFoundError` where appropriate. Preserve the
-> DAG-friendly pattern of returning an output file path string.
+> Build the AirAlert dashboard at `app/dashboard/` as a Next.js +
+> React + Tailwind project (W7A1 Part 4). Follow the strict outline
+> at `docs/dashboard_implementation_plan.md` exactly — that document
+> is the source of truth for the directory layout, every API route
+> contract, the feature-prep algorithm, the UI flow, the plain-
+> language headline logic, the trend chart spec, the constants
+> mirror, and the cross-review checklist coverage.
+>
+> Pre-requisites for this prompt (must be merged on `feat/dashboard`
+> before this work starts):
+> - Entry 7 (Phase 1a + Phase 2) is committed: `train.py` promotes
+>   newly registered model versions to MLflow's Production stage,
+>   AND `INTERFACE.md` has the finalized Decision 7 calibration
+>   paragraph and Decision 8 full write-up. The dashboard
+>   implementation reads from `INTERFACE.md` to know what `is_unsafe`
+>   and `unsafe_probability` actually mean and where the user-
+>   visible high/medium/low buckets come from.
+> - Drift detection commits are merged into `feat/dashboard` (already
+>   done via the `git merge feature/drift-detection` step).
+>
+> Scope of this PR is **the dashboard implementation only.** Do not
+> touch `ingest.py`, `transform.py`, `train.py` (Phase 1a already
+> shipped in Entry 7), `drift.py`, `constants.py`, the DAG, or
+> `serve.py`. `serve.py` is Gracelyn's file and stays exactly as
+> she wrote it — the dashboard renders against the W6 `/health`
+> three-field response shape (`status`, `model_name`, `stage`) and
+> POSTs to `/predict` per Contract 4 unchanged.
+>
+> The files that change in this PR — and only these:
+>
+> 1. **`app/dashboard/`** — new Next.js project per §"Files that
+>    change" §1 of `docs/dashboard_implementation_plan.md`.
+>    Bootstrap with `create-next-app`, TypeScript + Tailwind, app
+>    router, no src dir, no import alias. Implement every component,
+>    every API route, every lib file in the directory tree the plan
+>    documents. Use the exact dependency list from the plan's
+>    `package.json` block — do not add new packages without a
+>    written reason in the PR description.
+>
+> 2. **`app/dashboard/lib/constants.ts`** — mirror of the subset of
+>    `include/src/constants.py` listed in §"Constants kept in sync"
+>    of the plan. Add a header comment naming the Python file as the
+>    source of truth and instructing future readers to update both
+>    copies together.
+>
+> 3. **`INTERFACE.md`** — add ONE Phase-3 Change Log entry per
+>    §"Files that change" §3 of the plan. The Decision 7 and
+>    Decision 8 reasoning text MUST NOT be edited in this PR — that
+>    work was done in Entry 7. Touching it here would create a merge
+>    conflict and confuse the cross-review reviewer.
+>
+> Do not modify any other file. Conventions from
+> `.github/copilot-instructions.md` apply to the Python side; the
+> TypeScript side follows Next.js + Tailwind community conventions
+> (functional components with TS, no class components; no inline
+> styles, Tailwind classes; named exports for components; one
+> component per file).
+>
+> Three specific design points the plan calls out that need to be
+> implemented carefully:
+>
+> - **The browser never talks to FastAPI directly.** All three
+>   routes under `app/dashboard/app/api/` (`health`, `predict`,
+>   `features`) are the only thing that talks to FastAPI or to the
+>   filesystem. The browser side only ever fetches
+>   `/api/{health,predict,features}` — never `localhost:8000`
+>   directly. This is why we do NOT add CORS middleware to
+>   `serve.py`.
+>
+> - **The plain-language headline is not optional.** Implement the
+>   `plainLanguageHeadline` function from §"Plain-language headline
+>   logic" of the plan precisely — group consecutive unsafe hours
+>   into ranges, name the location in the sentence, produce a
+>   recommendation ("indoor recess" / "outdoor activities should be
+>   fine"). The W7A1 rubric is explicit that "`is_unsafe: 1` is not
+>   sufficient." High/medium/low confidence buckets must match
+>   Decision 7's thresholds (≥0.70 / ≥0.40 / <0.40).
+>
+> - **The recent-pattern feature prep follows Decision 8 exactly.**
+>   Implement the algorithm from §"Feature-prep algorithm" of the
+>   plan: actual-or-pattern fallback per lag hour, hour-of-day mean
+>   for future dates, `inconclusive` flag when fewer than 7
+>   observations are available for the target hour. The lookup
+>   window is `REFERENCE_WINDOW_DAYS = 14` days of raw history.
+>
+> After implementation, the project must satisfy every row of the
+> §"Test scenarios" and §"Rubric impact" tables in the plan. The
+> final smoke test must include: cold start with all three services
+> running (Airflow producing data, FastAPI on :8000, Next.js on
+> :3000) plus making at least one prediction through the UI for a
+> future date and confirming the plain-language headline renders
+> sensibly.
 
-**Summary:** Implemented the feature-engineering pipeline for AirAlert.
-Included robust schema validation, per-location lag/rolling computations that
-exclude current-hour leakage, temporal feature extraction, target creation,
-and CSV export to `include/data/features/features_{ds}.csv`. The helpers were
-designed to be testable and follow the project's docstring-and-typehint
-conventions.
+**Summary:** [to be filled in after implementation]
+
+---
+
+## Entry 9 — QE + GJ — 2026-05-14
+**Module:** `app/dashboard/app/api/`, `app/dashboard/components/`, `app/dashboard/app/page.tsx`, `INTERFACE.md` (Phase 3 Change Log row). Branch: `feat/dashboard`.
+
+**Prompt sent to Claude:**
+
+> Build the AirAlert dashboard UI surface (W7A1 Part 4 — sub-phases
+> 3c, 3d, and 3e on top of the skeleton + lib that already shipped
+> on `feat/dashboard`). Follow the strict outlines at
+> **`docs/dashboard_ui_spec.md`** (visual + interaction surface) and
+> **`docs/dashboard_implementation_plan.md`** (architecture, API
+> contracts, feature-prep algorithm). The UI spec is the source of
+> truth for what the user sees and how they interact with it; the
+> implementation plan is the source of truth for how the dashboard
+> is technically structured. Where the two overlap, the UI spec wins
+> on visual decisions.
+>
+> Pre-requisites already on this branch (no need to re-implement):
+> - `app/dashboard/` Next.js project bootstrapped — `package.json`,
+>   `tsconfig.json`, `tailwind.config.ts`, `postcss.config.mjs`,
+>   `next.config.mjs`, `.eslintrc.json`, `.gitignore`,
+>   `.env.local.example`, `app/layout.tsx`, `app/globals.css`,
+>   `app/page.tsx` (placeholder), `README.md`.
+> - `app/dashboard/lib/` populated — `constants.ts`, `types.ts`,
+>   `readRawCsv.ts`, `featurePrep.ts`, `plainLanguage.ts`, `api.ts`.
+> - Phase 1a (train.py Production promotion) and Phase 2 (Decision
+>   7 calibration paragraph + Decision 8 full write-up) are merged
+>   on this branch already.
+>
+> Scope of this PR is **the API routes, the UI components, and the
+> page composition only.** Do not re-bootstrap the project, do not
+> touch the lib files, do not touch `serve.py` (Gracelyn's file —
+> the W6 `/health` three-field shape is what we consume), do not
+> touch `ingest.py`, `transform.py`, `train.py`, `drift.py`,
+> `constants.py`, the DAG, the contracts, the existing Decisions
+> 1–8, tests, README, setup guides, or scripts.
+>
+> The files that change in this PR — and only these:
+>
+> 1. **`app/dashboard/app/api/health/route.ts`** — GET that proxies
+>    `${FASTAPI_URL}/health`. On any error from FastAPI, return HTTP
+>    503 with a JSON body matching `HealthResponse` shape but with
+>    `status: "fastapi_unreachable"`. Pass through the W6 three-field
+>    response (`status`, `model_name`, `stage`) unchanged on success.
+>
+> 2. **`app/dashboard/app/api/predict/route.ts`** — POST that proxies
+>    `${FASTAPI_URL}/predict` with the request body. Validate the
+>    incoming body matches `PredictRequest` (TypeScript runtime
+>    check via a small zod-free hand-rolled guard — keep deps minimal).
+>    Pass through Contract 4 (`is_unsafe`, `unsafe_probability`,
+>    `threshold_used`) unchanged.
+>
+> 3. **`app/dashboard/app/api/features/route.ts`** — GET that wraps
+>    `buildFeatureRows` from `lib/featurePrep.ts`. Query params:
+>    `location` (one of the three LocationKey values), `from` (ISO
+>    8601 UTC datetime), `hours` (1–24). Return a `FeaturesResponse`
+>    per Decision 8 — one row per hour with `features`,
+>    `data_source`, `fallback_used`, plus the aggregate
+>    `reference_window_days` and `any_fallback_used`.
+>
+> 4. **`app/dashboard/app/api/trend/route.ts`** — GET that wraps
+>    `buildTrendSeries` from `lib/featurePrep.ts`. Query params:
+>    `location`, `days` (default 7, max 30). Return `{location,
+>    days, points: TrendPoint[]}` where each point has
+>    `{timestamp, pm25, is_unsafe}`.
+>
+> 5. **`app/dashboard/components/`** — implement every component
+>    documented in §"Components" of `docs/dashboard_ui_spec.md`,
+>    one component per file, named exports:
+>    - `HealthBadge.tsx` — three-state pill, 30s polling.
+>    - `LocationPicker.tsx` — three-button segmented control with
+>      radiogroup semantics.
+>    - `DateTimePicker.tsx` — date input with `minDate` / `maxDate`
+>      bounds per the UI spec.
+>    - `HourRangeSlider.tsx` — dual-thumb slider; thumbs cannot cross;
+>      min span 1, max span 12.
+>    - `PredictButton.tsx` — primary button with the three states
+>      (default / loading / disabled) from the UI spec.
+>    - `PredictionCard.tsx` — narrative box with the four-row
+>      layout (label / headline / recommendation / confidence). Reads
+>      `state` and renders `empty | loading | result | error`.
+>    - `HourlyPredictionStrip.tsx` — the 11-cell strip per
+>      §"HourlyPredictionStrip" of the UI spec. Five visual states
+>      from `cellState()` in `lib/plainLanguage.ts`; glyphs from
+>      Tabler outline (or inline SVGs if Tabler isn't readily
+>      available — match the icon names called out in the spec);
+>      ⓘ fallback indicator on cells with `fallback_used: true`;
+>      hover/tap popover with the raw probability and metadata.
+>    - `TrendChart.tsx` — Recharts `LineChart` with the 35.4
+>      reference line, the above-threshold red recoloring, axis
+>      labels, tooltips, loading skeleton, error card, accessible
+>      `aria-label`.
+>    - `DataSourceLegend.tsx` — small footer line with the
+>      dynamic copy from §"DataSourceLegend" of the UI spec.
+>    - `ui/Button.tsx`, `ui/Card.tsx`, `ui/Select.tsx` — small
+>      primitives used by the above. Functional, no animations
+>      beyond hover/focus state.
+>
+> 6. **`app/dashboard/app/page.tsx`** — replace the placeholder
+>    scaffold with the full composition documented in §"Page
+>    anatomy" of the UI spec. Manages the top-level state machine
+>    (`INITIAL → READY → PREDICTING → HAS_RESULT | ERROR`). Reads
+>    `getHealth`, `predictRange`, `getTrend` from `lib/api.ts`.
+>    Default values: location=red_butte, date=tomorrow, hours=8-18.
+>    Responsive grid per the spec.
+>
+> 7. **`INTERFACE.md`** — append ONE Phase-3 Change Log row stating
+>    that the dashboard implementation landed. Do not modify any
+>    Decision in this PR.
+>
+> Conventions (must follow):
+> - TypeScript functional components with named exports. No class
+>   components.
+> - One component per file. File names match the exported component.
+> - Tailwind utility classes only — no inline `style={{}}` except
+>   for Recharts internals that require it.
+> - Use the color tokens from the UI spec §"Color tokens" — pull from
+>   `tailwind.config.ts` for `safe-*`, `caution-*`, `unsafe-*`.
+> - `aria-label` on every glyph-only interactive element.
+> - `role="status"` + `aria-live="polite"` on the result regions
+>   (HealthBadge, PredictionCard result state).
+> - Loading states everywhere — never render a flash of empty
+>   content while data is in flight.
+> - No raw `unsafe_probability` numbers in the UI outside the cell
+>   popover. The user sees high/medium/low buckets per Decision 7.
+>
+> The browser MUST never call `localhost:8000` directly. Every
+> outbound request from the browser goes through one of the four
+> `app/api/*` routes. This is the architectural commitment in
+> Decision 8 that lets `serve.py` skip CORS middleware.
+>
+> After implementation, the project must satisfy every row of
+> §"Acceptance criteria" in `docs/dashboard_ui_spec.md`. Run
+> `npm run typecheck` and `npm run lint` from `app/dashboard/` and
+> ensure both pass (lint may warn but must not error). Then run
+> `npm run dev` and walk the §"Acceptance criteria" checklist with
+> FastAPI live on `:8000`.
+
+**Summary:** [to be filled in after implementation]

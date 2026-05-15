@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 248 250 252;
+  --foreground: 15 23 42;
+}
+
+html,
+body {
+  font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1, "cv11" 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle ambient gradient for the page background so the dashboard
+   doesn't feel like a flat sheet of paper. Soft enough to never
+   compete with the foreground content. */
+body {
+  background:
+    radial-gradient(1200px circle at 0% -10%, #eef2ff 0%, transparent 50%),
+    radial-gradient(900px circle at 100% 0%, #f0f9ff 0%, transparent 45%),
+    #f8fafc;
+  background-attachment: fixed;
+}
+
+/* Tabular numbers for any element with this class — keeps the
+   confidence percentages and probability values from jumping around
+   as they update. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Dual-thumb range slider plumbing for HourRangeSlider. */
+.dual-thumb {
+  pointer-events: none;
+  z-index: 2;
+}
+.dual-thumb::-webkit-slider-thumb {
+  pointer-events: auto;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  background: #4f46e5;
+  border: 3px solid #ffffff;
+  box-shadow: 0 0 0 1px #c7d2fe, 0 2px 6px rgba(99, 102, 241, 0.3);
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+.dual-thumb::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+.dual-thumb::-moz-range-thumb {
+  pointer-events: auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  background: #4f46e5;
+  border: 3px solid #ffffff;
+  box-shadow: 0 0 0 1px #c7d2fe, 0 2px 6px rgba(99, 102, 241, 0.3);
+  cursor: pointer;
+}
+.dual-thumb::-webkit-slider-runnable-track {
+  background: transparent;
+}
+.dual-thumb::-moz-range-track {
+  background: transparent;
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   Dual-thumb range slider plumbing for HourRangeSlider.
+   Both <input type="range"> elements share the same track; we hide
+   each track and only show the round thumbs, then position them with
+   z-index so both are clickable. Lives here (instead of inline) so
+   TypeScript doesn't need styled-jsx types to compile.
+   ────────────────────────────────────────────────────────────────── */
+.dual-thumb {
+  pointer-events: none;
+  z-index: 2;
+}
+.dual-thumb::-webkit-slider-thumb {
+  pointer-events: auto;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+  background: #0f172a;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px #cbd5e1;
+  cursor: pointer;
+}
+.dual-thumb::-moz-range-thumb {
+  pointer-events: auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+  background: #0f172a;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px #cbd5e1;
+  cursor: pointer;
+}
+.dual-thumb::-webkit-slider-runnable-track {
+  background: transparent;
+}
+.dual-thumb::-moz-range-track {
+  background: transparent;
+}
