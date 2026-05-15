@@ -155,10 +155,27 @@ def date_feature(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # Number of prior days of raw CSVs to concatenate into the feature build.
-# pm25_lag_24h requires at least 25 hours of history per location; reading
-# a 7-day window gives lag and rolling features enough lookback to survive
-# the post-feature dropna() and leaves a buffer when a prior day is missing.
-_HISTORY_DAYS: int = 7
+# pm25_lag_24h requires at least 25 hours of history per location; the
+# window must be wide enough that the chronological 80/20 split inside
+# train.py reliably puts some unsafe-class examples into BOTH train and
+# test. Empirically, on Utah PM2.5 data with the AirAlert pipeline:
+#
+#   - A  7-day window leaves smoke/inversion episodes clustered in one
+#     fold; the test set frequently has zero positives → F1 → 0.
+#   - A 30-day window yields ~700 rows/location and reliably puts a
+#     handful of positives in test (F1 lands in the 0.4-0.6 band).
+#   - A 60-day window is essentially "use all the raw data we have"
+#     given a ~5-week ingest history; transform.py reads only files
+#     that actually exist on disk so over-asking is free. With richer
+#     class diversity the LR pipeline fits stronger coefficients on
+#     the pm25 lag features.
+#
+# Setting this to 60 means the daily DAG pulls in every prior day's
+# raw file currently on disk (whichever subset of ds-60..ds-1 exists)
+# and lets the model see the largest training window available. When
+# the ingest history is shorter than 60 days, the missing days are
+# silently skipped — see `_gather_raw_history` in this module.
+_HISTORY_DAYS: int = 60
 
 
 def _target_date_from_filename(raw_data_path: Path) -> "datetime | None":

@@ -217,7 +217,7 @@ app/dashboard/
 │   ├── DateTimePicker.tsx
 │   ├── HourRangeSlider.tsx
 │   ├── PredictionCard.tsx
-│   ├── HourlyPredictionsTable.tsx
+│   ├── HourlyPredictionStrip.tsx        ← see "Prediction visualization" below
 │   ├── TrendChart.tsx
 │   ├── DataSourceLegend.tsx
 │   └── ui/
@@ -353,6 +353,35 @@ function plainLanguageHeadline(
 
 Confidence buckets match Decision 7: `prob >= 0.70` → high, `>= 0.40`
 → medium, else low.
+
+#### Prediction visualization — strip over table over line
+
+The model produces one prediction per hour for the requested range
+(default 8 AM–6 PM, 11 hours). Three visualization shapes were
+considered:
+
+| Shape | Verdict |
+|---|---|
+| Line chart of `unsafe_probability` vs. hour | **Rejected.** Lines imply continuity between hours, and per Decision 7 the raw probability is a relative ranking score (not a calibrated absolute), so visual height differences would mislead a non-technical user. |
+| Text table (hour · verdict · probability · confidence) | **Reasonable but dense.** Forces the user to read every row to spot the unsafe window. |
+| **Hourly status strip** (one colored cell per hour) | **Adopted.** Color = safe / borderline / unsafe verdict. Saturation = confidence bucket (high = saturated, medium/low = lighter). Glyph (✓ / ⚠ / ✗) reinforces color for accessibility. |
+
+The strip encodes only what Decision 7 says we can honestly show — the
+binary verdict plus the high/medium/low confidence bucket. Raw
+`unsafe_probability` is available in a hover popover for users who
+want it.
+
+`components/HourlyPredictionStrip.tsx` renders the 11-cell grid.
+Color rule:
+
+- **Safe + high/medium confidence** → green cell, ✓ glyph (`c-green 50` bg, `c-green 600` border, `c-green 900` glyph).
+- **Safe + low confidence** OR **unsafe + low confidence** → amber cell, ⚠ glyph (`c-amber 50` bg, `c-amber 600` border, `c-amber 800` glyph). This is the "we're not sure" bucket; intentionally collapses low-confidence safe and low-confidence unsafe into one borderline state because the rubric question ("indoor or outdoor?") doesn't benefit from finer gradation in the uncertain zone.
+- **Unsafe + medium confidence** → red cell, ✗ glyph (`c-red 50` bg, `c-red 600` border, `c-red 800` glyph).
+- **Unsafe + high confidence** → saturated red cell, ✗ glyph (`c-red 100` bg, `c-red 700` border, `c-red 900` glyph). Pulls the eye to the most actionable hours.
+- **Any cell with `fallback_used: true`** → renders a small ⓘ icon in the top-right corner of the cell (does not change the verdict color).
+
+Cell click → opens a small popover with the underlying numbers
+(raw probability, data_source, fallback flag) for power users.
 
 #### `components/TrendChart.tsx`
 

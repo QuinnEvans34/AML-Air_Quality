@@ -295,7 +295,23 @@ Added comments throughout to explain why each piece exists and kept the API alig
 ---
 
 ## Entry 8 — QE + GJ — 2026-05-14
-**Module:** `app/dashboard/` (new Next.js project), `INTERFACE.md` (Phase 3 Change Log row only). Branch: `feat/dashboard`.
+**Module:** `app/dashboard/` (Next.js project skeleton + lib functions, sub-phases 3a–3b). Branch: `feat/dashboard`.
+
+> **Note (revised 2026-05-14):** Entry 8 originally covered the entire
+> dashboard implementation. After sub-phases 3a (project skeleton) and
+> 3b (lib functions: `readRawCsv.ts`, `featurePrep.ts`,
+> `plainLanguage.ts`, `api.ts`, plus `constants.ts` and `types.ts`)
+> shipped, the remaining UI work (sub-phases 3c API routes, 3d
+> components, 3e page composition) was split into Entry 9 below so the
+> visual design decisions agreed on after sub-phase 3b — the
+> three-color verdict strip, glyph reinforcement, plain-language
+> headline grouping — could be captured in their own dedicated UI
+> spec (`docs/dashboard_ui_spec.md`) and the prompt grader would have
+> a single self-contained reference for the UI surface.
+>
+> Entry 8 above remains the source-of-truth prompt for what already
+> shipped (skeleton + lib). Entry 9 below is the source-of-truth
+> prompt for what ships next (API routes + components + composition).
 
 **Prompt sent to Claude:**
 
@@ -391,5 +407,146 @@ Added comments throughout to explain why each piece exists and kept the API alig
 > :3000) plus making at least one prediction through the UI for a
 > future date and confirming the plain-language headline renders
 > sensibly.
+
+**Summary:** [to be filled in after implementation]
+
+---
+
+## Entry 9 — QE + GJ — 2026-05-14
+**Module:** `app/dashboard/app/api/`, `app/dashboard/components/`, `app/dashboard/app/page.tsx`, `INTERFACE.md` (Phase 3 Change Log row). Branch: `feat/dashboard`.
+
+**Prompt sent to Claude:**
+
+> Build the AirAlert dashboard UI surface (W7A1 Part 4 — sub-phases
+> 3c, 3d, and 3e on top of the skeleton + lib that already shipped
+> on `feat/dashboard`). Follow the strict outlines at
+> **`docs/dashboard_ui_spec.md`** (visual + interaction surface) and
+> **`docs/dashboard_implementation_plan.md`** (architecture, API
+> contracts, feature-prep algorithm). The UI spec is the source of
+> truth for what the user sees and how they interact with it; the
+> implementation plan is the source of truth for how the dashboard
+> is technically structured. Where the two overlap, the UI spec wins
+> on visual decisions.
+>
+> Pre-requisites already on this branch (no need to re-implement):
+> - `app/dashboard/` Next.js project bootstrapped — `package.json`,
+>   `tsconfig.json`, `tailwind.config.ts`, `postcss.config.mjs`,
+>   `next.config.mjs`, `.eslintrc.json`, `.gitignore`,
+>   `.env.local.example`, `app/layout.tsx`, `app/globals.css`,
+>   `app/page.tsx` (placeholder), `README.md`.
+> - `app/dashboard/lib/` populated — `constants.ts`, `types.ts`,
+>   `readRawCsv.ts`, `featurePrep.ts`, `plainLanguage.ts`, `api.ts`.
+> - Phase 1a (train.py Production promotion) and Phase 2 (Decision
+>   7 calibration paragraph + Decision 8 full write-up) are merged
+>   on this branch already.
+>
+> Scope of this PR is **the API routes, the UI components, and the
+> page composition only.** Do not re-bootstrap the project, do not
+> touch the lib files, do not touch `serve.py` (Gracelyn's file —
+> the W6 `/health` three-field shape is what we consume), do not
+> touch `ingest.py`, `transform.py`, `train.py`, `drift.py`,
+> `constants.py`, the DAG, the contracts, the existing Decisions
+> 1–8, tests, README, setup guides, or scripts.
+>
+> The files that change in this PR — and only these:
+>
+> 1. **`app/dashboard/app/api/health/route.ts`** — GET that proxies
+>    `${FASTAPI_URL}/health`. On any error from FastAPI, return HTTP
+>    503 with a JSON body matching `HealthResponse` shape but with
+>    `status: "fastapi_unreachable"`. Pass through the W6 three-field
+>    response (`status`, `model_name`, `stage`) unchanged on success.
+>
+> 2. **`app/dashboard/app/api/predict/route.ts`** — POST that proxies
+>    `${FASTAPI_URL}/predict` with the request body. Validate the
+>    incoming body matches `PredictRequest` (TypeScript runtime
+>    check via a small zod-free hand-rolled guard — keep deps minimal).
+>    Pass through Contract 4 (`is_unsafe`, `unsafe_probability`,
+>    `threshold_used`) unchanged.
+>
+> 3. **`app/dashboard/app/api/features/route.ts`** — GET that wraps
+>    `buildFeatureRows` from `lib/featurePrep.ts`. Query params:
+>    `location` (one of the three LocationKey values), `from` (ISO
+>    8601 UTC datetime), `hours` (1–24). Return a `FeaturesResponse`
+>    per Decision 8 — one row per hour with `features`,
+>    `data_source`, `fallback_used`, plus the aggregate
+>    `reference_window_days` and `any_fallback_used`.
+>
+> 4. **`app/dashboard/app/api/trend/route.ts`** — GET that wraps
+>    `buildTrendSeries` from `lib/featurePrep.ts`. Query params:
+>    `location`, `days` (default 7, max 30). Return `{location,
+>    days, points: TrendPoint[]}` where each point has
+>    `{timestamp, pm25, is_unsafe}`.
+>
+> 5. **`app/dashboard/components/`** — implement every component
+>    documented in §"Components" of `docs/dashboard_ui_spec.md`,
+>    one component per file, named exports:
+>    - `HealthBadge.tsx` — three-state pill, 30s polling.
+>    - `LocationPicker.tsx` — three-button segmented control with
+>      radiogroup semantics.
+>    - `DateTimePicker.tsx` — date input with `minDate` / `maxDate`
+>      bounds per the UI spec.
+>    - `HourRangeSlider.tsx` — dual-thumb slider; thumbs cannot cross;
+>      min span 1, max span 12.
+>    - `PredictButton.tsx` — primary button with the three states
+>      (default / loading / disabled) from the UI spec.
+>    - `PredictionCard.tsx` — narrative box with the four-row
+>      layout (label / headline / recommendation / confidence). Reads
+>      `state` and renders `empty | loading | result | error`.
+>    - `HourlyPredictionStrip.tsx` — the 11-cell strip per
+>      §"HourlyPredictionStrip" of the UI spec. Five visual states
+>      from `cellState()` in `lib/plainLanguage.ts`; glyphs from
+>      Tabler outline (or inline SVGs if Tabler isn't readily
+>      available — match the icon names called out in the spec);
+>      ⓘ fallback indicator on cells with `fallback_used: true`;
+>      hover/tap popover with the raw probability and metadata.
+>    - `TrendChart.tsx` — Recharts `LineChart` with the 35.4
+>      reference line, the above-threshold red recoloring, axis
+>      labels, tooltips, loading skeleton, error card, accessible
+>      `aria-label`.
+>    - `DataSourceLegend.tsx` — small footer line with the
+>      dynamic copy from §"DataSourceLegend" of the UI spec.
+>    - `ui/Button.tsx`, `ui/Card.tsx`, `ui/Select.tsx` — small
+>      primitives used by the above. Functional, no animations
+>      beyond hover/focus state.
+>
+> 6. **`app/dashboard/app/page.tsx`** — replace the placeholder
+>    scaffold with the full composition documented in §"Page
+>    anatomy" of the UI spec. Manages the top-level state machine
+>    (`INITIAL → READY → PREDICTING → HAS_RESULT | ERROR`). Reads
+>    `getHealth`, `predictRange`, `getTrend` from `lib/api.ts`.
+>    Default values: location=red_butte, date=tomorrow, hours=8-18.
+>    Responsive grid per the spec.
+>
+> 7. **`INTERFACE.md`** — append ONE Phase-3 Change Log row stating
+>    that the dashboard implementation landed. Do not modify any
+>    Decision in this PR.
+>
+> Conventions (must follow):
+> - TypeScript functional components with named exports. No class
+>   components.
+> - One component per file. File names match the exported component.
+> - Tailwind utility classes only — no inline `style={{}}` except
+>   for Recharts internals that require it.
+> - Use the color tokens from the UI spec §"Color tokens" — pull from
+>   `tailwind.config.ts` for `safe-*`, `caution-*`, `unsafe-*`.
+> - `aria-label` on every glyph-only interactive element.
+> - `role="status"` + `aria-live="polite"` on the result regions
+>   (HealthBadge, PredictionCard result state).
+> - Loading states everywhere — never render a flash of empty
+>   content while data is in flight.
+> - No raw `unsafe_probability` numbers in the UI outside the cell
+>   popover. The user sees high/medium/low buckets per Decision 7.
+>
+> The browser MUST never call `localhost:8000` directly. Every
+> outbound request from the browser goes through one of the four
+> `app/api/*` routes. This is the architectural commitment in
+> Decision 8 that lets `serve.py` skip CORS middleware.
+>
+> After implementation, the project must satisfy every row of
+> §"Acceptance criteria" in `docs/dashboard_ui_spec.md`. Run
+> `npm run typecheck` and `npm run lint` from `app/dashboard/` and
+> ensure both pass (lint may warn but must not error). Then run
+> `npm run dev` and walk the §"Acceptance criteria" checklist with
+> FastAPI live on `:8000`.
 
 **Summary:** [to be filled in after implementation]

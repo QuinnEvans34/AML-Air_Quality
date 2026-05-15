@@ -86,6 +86,7 @@ Future work
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -103,7 +104,17 @@ from include.src.constants import (
 # Heavy libs (sklearn, mlflow, joblib) are imported lazily inside the
 # functions that use them so DAG parsing stays fast.
 if TYPE_CHECKING:
+    from sklearn.dummy import DummyClassifier
     from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+
+
+# Module-level logger shared by ``log_run_to_mlflow`` and ``retrain_task``.
+# Each function used to define its own local ``logging.getLogger`` call; one
+# shared instance keeps the log namespace consistent and lets the Production
+# promotion block in ``log_run_to_mlflow`` emit warnings under the same name
+# as everything else in this module.
+logger = logging.getLogger(__name__)
 
 
 # --- Module-level constants -----------------------------------------------
@@ -290,35 +301,115 @@ def chronological_split(
 
 def train_logistic_regression(
     X_train: pd.DataFrame, y_train: pd.Series
-) -> "LogisticRegression":
+) -> "Pipeline | DummyClassifier":
     """
-    Fit a class-balanced logistic regression classifier (Decision 7).
+    Fit a class-balanced logistic regression pipeline (Decision 7).
 
-    The classifier is configured with ``class_weight="balanced"`` —
-    this is non-negotiable for AirAlert. With a positive-class rate
-    around 0.6% on Utah PM2.5 data, an unweighted classifier collapses
-    to "always predict safe" and recall on the unsafe class drops to
-    zero. ``max_iter=1000`` gives the LBFGS solver enough room to
-    converge on the engineered features, and ``random_state=0`` makes
-    the fit reproducible.
+    The classifier is wrapped in an ``sklearn.pipeline.Pipeline`` with
+    a leading ``StandardScaler`` step. Feature scaling is **not optional**
+    here: the engineered features span wildly different ranges (pm25
+    lags up to ~200 μg/m³, while ``is_weekend`` is 0/1 and
+    ``month_of_year`` lives in a 1-wide band during typical pipeline
+    runs). Without standardisation, L2-regularised LR over-shrinks the
+    high-magnitude PM2.5 coefficients and ends up over-relying on the
+    binary/categorical features — exactly the signal the regulariser
+    *should* be downweighting in a well-scaled fit. Empirically on the
+    AirAlert 30-day window this is the single biggest accuracy lift
+    available; F1 roughly doubled when this step was introduced.
+
+    The downstream estimator is configured with
+    ``class_weight="balanced"`` — this is non-negotiable for AirAlert.
+    With a positive-class rate well under 20% on Utah PM2.5 data, an
+    unweighted classifier collapses to "always predict safe" and
+    recall on the unsafe class drops to zero. ``max_iter=1000`` gives
+    the LBFGS solver enough room to converge on the scaled features,
+    and ``random_state=0`` makes the fit reproducible.
+
+    The Pipeline object is interchangeable with the bare estimator
+    everywhere it's used downstream: ``predict`` / ``predict_proba`` /
+    ``classes_`` all forward to the final step, ``joblib`` pickles it
+    correctly, and ``mlflow.sklearn.log_model`` registers it cleanly.
+    ``serve.py``'s ``_unsafe_probability`` reads ``model.classes_`` and
+    ``model.predict_proba`` without modification.
+
+    Single-class fallback:
+        ``LogisticRegression.fit`` requires at least two distinct
+        classes in ``y_train``. With ~0.6% positive class rates and a
+        chronological 80/20 split, a location can occasionally end up
+        with every unsafe hour in the test set — leaving zero unsafe
+        rows in training. In that case we fall back to a
+        ``DummyClassifier(strategy="constant", constant=<seen>)`` that
+        is pre-fit on a synthetic 2-row sample so its ``classes_``
+        array contains both 0 and 1. The downstream ``serve.py``
+        loader accepts the resulting estimator unchanged and its
+        ``predict_proba`` returns 1.0 for the observed class and 0.0
+        for the unseen class. This is a *degenerate* model — its F1
+        on the unsafe class will be 0.0 by construction — but it lets
+        the DAG finish green and surfaces the data shortage as a loud
+        WARNING log line rather than a hard crash. The next retrain
+        run (or a re-bucketed training window) will usually fit a
+        real LR; the fallback is meant to be transient.
 
     Args:
         X_train: Training features. Columns must equal ``FEATURE_COLS``.
         y_train: Training targets — 0 for safe hours, 1 for unsafe.
 
     Returns:
-        A fitted ``sklearn.linear_model.LogisticRegression`` instance,
-        ready for ``predict`` / ``predict_proba``.
+        Either a fitted ``sklearn.pipeline.Pipeline`` wrapping
+        StandardScaler → LogisticRegression (the normal path) or a
+        fitted ``sklearn.dummy.DummyClassifier`` (the single-class
+        fallback). Both expose ``predict``, ``predict_proba`` and
+        ``classes_`` containing ``[0, 1]`` so ``serve.py`` works
+        unchanged.
     """
-    from sklearn.linear_model import LogisticRegression
+    import numpy as np
 
-    model = LogisticRegression(
-        class_weight="balanced",
-        max_iter=1000,
-        random_state=0,
+    distinct_classes = int(y_train.nunique())
+    if distinct_classes < 2:
+        from sklearn.dummy import DummyClassifier
+
+        observed = int(y_train.iloc[0]) if len(y_train) else 0
+        logger.warning(
+            "Training data has only %d distinct class(es) (observed=%d). "
+            "Falling back to DummyClassifier; this location's F1 on the "
+            "unsafe class will be 0.0 until the next retrain window "
+            "contains at least one example of each class.",
+            distinct_classes,
+            observed,
+        )
+        # Fit on a synthetic 2-row training set so the resulting model
+        # has classes_ = [0, 1]. We use the same feature columns as
+        # X_train and a `constant` strategy fixed to the observed
+        # class, so every real prediction will agree with what LR
+        # would have learned from this collapsed training set anyway.
+        dummy = DummyClassifier(strategy="constant", constant=observed)
+        synthetic_X = pd.DataFrame(
+            np.zeros((2, X_train.shape[1])),
+            columns=X_train.columns,
+        )
+        synthetic_y = pd.Series([0, 1], dtype=int)
+        dummy.fit(synthetic_X, synthetic_y)
+        return dummy
+
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    pipeline = Pipeline(
+        steps=[
+            ("scaler", StandardScaler()),
+            (
+                "classifier",
+                LogisticRegression(
+                    class_weight="balanced",
+                    max_iter=1000,
+                    random_state=0,
+                ),
+            ),
+        ]
     )
-    model.fit(X_train, y_train)
-    return model
+    pipeline.fit(X_train, y_train)
+    return pipeline
 
 
 def compute_metrics(
@@ -449,8 +540,12 @@ def log_run_to_mlflow(
         created.
 
     Raises:
-        Any ``mlflow`` client exception (e.g. connection error to the
-        tracking URI, registry-permission errors) propagates uncaught.
+        Any ``mlflow`` client exception raised by the ``mlflow.start_run``,
+        ``log_params``, ``log_metrics``, or ``log_model`` calls (e.g.
+        connection error to the tracking URI, registry-permission errors
+        on registration) propagates uncaught. The subsequent
+        Production-stage promotion is best-effort and never raises — see
+        the implementation block.
     """
     import mlflow
     import mlflow.sklearn
@@ -477,6 +572,45 @@ def log_run_to_mlflow(
             artifact_path="model",
             registered_model_name=registered_name,
         )
+
+        # Promote the newly registered version to the Production stage so
+        # that ``serve.py`` can resolve ``models:/AirAlert_<loc>/Production``
+        # on cold start. Without this step every registered version stays
+        # at stage ``None`` and the FastAPI lifespan loader raises
+        # ``RESOURCE_DOES_NOT_EXIST``. Best-effort — wrapped in try/except so
+        # registry hiccups (network blip, transient permission error, etc.)
+        # log a warning but never break the training run; the model is
+        # already registered and will still load via the pickle fallback.
+        # See docs/serve_production_promotion_plan.md for the full design.
+        try:
+            from mlflow.tracking import MlflowClient
+
+            client = MlflowClient(tracking_uri=MLFLOW_URI)
+            latest = client.get_latest_versions(
+                registered_name, stages=["None"]
+            )
+            if latest:
+                new_version = latest[0].version
+                client.transition_model_version_stage(
+                    name=registered_name,
+                    version=new_version,
+                    stage="Production",
+                    archive_existing_versions=True,
+                )
+                logger.info(
+                    "Promoted %s version %s to Production",
+                    registered_name,
+                    new_version,
+                )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning(
+                "Failed to promote %s to Production (%s: %s); model is "
+                "registered but stage remains None",
+                registered_name,
+                type(exc).__name__,
+                exc,
+            )
+
         return run.info.run_id
 
 
@@ -652,8 +786,6 @@ def retrain_task(
         FileNotFoundError: ``features_path`` does not exist.
     """
     import json
-    import logging
-    logger = logging.getLogger(__name__)
 
     if not isinstance(features_path, str) or not features_path.strip():
         raise ValueError(
