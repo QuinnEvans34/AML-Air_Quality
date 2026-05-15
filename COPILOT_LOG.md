@@ -221,3 +221,49 @@ Added comments throughout to explain why each piece exists and kept the API alig
 > §"Test scenarios" and §"Rubric impact" tables in the plan.
 
 **Summary:** [to be filled in after implementation]
+
+---
+
+## Entry 7 — GJ — 2026-05-05
+**Module:** `include/src/transform.py` (commit 1 of 2 — signatures + docstrings)
+
+**Prompt sent to Claude:**
+
+> Create `include/src/transform.py` for the AirAlert pipeline. Follow the
+> strict outline at `docs/transform_implementation_plan.md` exactly — that
+> document is the source of truth for the module's public API, the required
+> lag and rolling-window semantics, and the contract with `ingest.py` and
+> `train.py` (Contract 1 and Contract 2). Produce the module docstring,
+> imports, module-level constants, and the typed function signatures with
+> full Args/Returns/Raises docstrings. Do not implement function bodies in
+> this commit; function bodies will be added in a follow-up commit.
+
+**Summary:** Added the `transform.py` module scaffold: module-level
+documentation, typed function signatures (`validation_helper`, `lag_feature`,
+`rolling_feature`, `date_feature`, `_gather_raw_history`, and `build_features`),
+and contract-oriented docstrings. This commit intentionally left bodies for a
+later implementation pass to preserve incremental reviewability.
+
+---
+
+## Entry 8 — GJ — 2026-05-09
+**Module:** `include/src/transform.py` (commit 2 of 2 — function bodies)
+
+**Prompt sent to Claude:**
+
+> Fill in the function bodies of `include/src/transform.py` per
+> `docs/transform_implementation_plan.md`. Implement validation of the raw
+> schema, UTC timestamp parsing, per-`location_id` sorting, lag features
+> (1h, 3h, 24h), 3-hour rolling mean/std excluding the current hour, temporal
+> features (`hour_of_day`, `day_of_week`, `month_of_year`, `is_weekend`),
+> `is_unsafe` target creation using the `UNSAFE_THRESHOLD`, and the final
+> contract-limited CSV output. Use `pathlib.Path` for paths and raise
+> meaningful `ValueError`/`FileNotFoundError` where appropriate. Preserve the
+> DAG-friendly pattern of returning an output file path string.
+
+**Summary:** Implemented the feature-engineering pipeline for AirAlert.
+Included robust schema validation, per-location lag/rolling computations that
+exclude current-hour leakage, temporal feature extraction, target creation,
+and CSV export to `include/data/features/features_{ds}.csv`. The helpers were
+designed to be testable and follow the project's docstring-and-typehint
+conventions.
