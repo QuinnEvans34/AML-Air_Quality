@@ -21,14 +21,19 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
+import type { LocationKey } from "@/lib/constants";
 import type { PlainLanguageVerdict } from "@/lib/types";
+
+import { NearbySchoolsChips } from "./NearbySchoolsChips";
 
 interface PredictionCardProps {
   state: "empty" | "loading" | "result" | "error";
+  location: LocationKey;
   verdict?: PlainLanguageVerdict | null;
   errorMessage?: string | null;
   unsafeHours?: number;
   totalHours?: number;
+  yesterdayUnsafeHours?: number | null;
 }
 
 const CONFIDENCE_LABEL: Record<"high" | "medium" | "low", string> = {
@@ -95,10 +100,12 @@ function visualFor(verdict: PlainLanguageVerdict): Visual {
 
 export function PredictionCard({
   state,
+  location,
   verdict,
   errorMessage,
   unsafeHours,
   totalHours,
+  yesterdayUnsafeHours,
 }: PredictionCardProps) {
   if (state === "empty") {
     return (
@@ -190,7 +197,7 @@ export function PredictionCard({
               v.accent,
             )}
           >
-            Outlook · {v.label}
+            Recess outlook · {v.label}
           </p>
           <h2 className="mt-1 text-2xl font-semibold leading-tight tracking-tight text-slate-900">
             {renderHeadlineWithColoredVerdict(verdict, v.accent)}
@@ -199,6 +206,16 @@ export function PredictionCard({
             <RecIcon className="h-4 w-4 text-slate-500" aria-hidden />
             <span>{verdict.recommendation}</span>
           </p>
+          {yesterdayUnsafeHours !== null &&
+            yesterdayUnsafeHours !== undefined &&
+            typeof unsafeHours === "number" && (
+              <p className="mt-2 text-xs text-slate-500">
+                <span className="font-medium text-slate-700">
+                  vs yesterday:
+                </span>{" "}
+                {compareYesterday(yesterdayUnsafeHours, unsafeHours)}
+              </p>
+            )}
         </div>
       </div>
 
@@ -210,7 +227,11 @@ export function PredictionCard({
           </span>
           {typeof unsafeHours === "number" && typeof totalHours === "number" && (
             <span className="text-xs tabular-nums text-slate-600">
-              {unsafeHours} of {totalHours} hours predicted unsafe
+              {unsafeHours === 0
+                ? `All ${totalHours} hours in range predicted safe`
+                : unsafeHours === 1
+                  ? `1 hour of ${totalHours} predicted unsafe`
+                  : `${unsafeHours} of ${totalHours} hours predicted unsafe`}
             </span>
           )}
         </div>
@@ -235,8 +256,31 @@ export function PredictionCard({
           a relative ranking, not a calibrated chance.
         </span>
       </div>
+
+      <div className="mt-5 border-t border-slate-200/70 pt-4">
+        <NearbySchoolsChips location={location} />
+      </div>
     </div>
   );
+}
+
+function compareYesterday(yesterday: number, today: number): string {
+  if (yesterday === 0 && today === 0) {
+    return "Yesterday was clear; today is forecast clear too.";
+  }
+  if (yesterday === 0 && today > 0) {
+    return `Yesterday was clear; today is forecast to have ${today} unsafe hour${today > 1 ? "s" : ""}.`;
+  }
+  if (yesterday > 0 && today === 0) {
+    return `Yesterday had ${yesterday} unsafe hour${yesterday > 1 ? "s" : ""}; today is forecast to be clear.`;
+  }
+  if (today > yesterday) {
+    return `Yesterday had ${yesterday} unsafe hour${yesterday > 1 ? "s" : ""}; today is forecast worse (${today}).`;
+  }
+  if (today < yesterday) {
+    return `Yesterday had ${yesterday} unsafe hour${yesterday > 1 ? "s" : ""}; today is forecast better (${today}).`;
+  }
+  return `Today's forecast matches yesterday (${today} unsafe hour${today > 1 ? "s" : ""}).`;
 }
 
 function renderHeadlineWithColoredVerdict(

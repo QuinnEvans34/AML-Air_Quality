@@ -22,14 +22,16 @@ import {
   Database,
   HelpCircle,
   Sparkles,
-  Sun,
-  Sunrise,
-  Sunset,
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
-import { cellState, formatHour } from "@/lib/plainLanguage";
+import {
+  cellState,
+  formatHourMT,
+  schoolPeriodFor,
+} from "@/lib/plainLanguage";
+import { utcHourToMtHour } from "@/lib/timezone";
 import type { HourlyPrediction } from "@/lib/types";
 
 interface HourlyPredictionStripProps {
@@ -153,11 +155,15 @@ export function HourlyPredictionStrip({
           const Glyph = visual.glyph;
           const { Icon: SourceIcon, title: sourceTitle } = dataSourceIcon(p);
           const isSelected = selectedIndex === i;
+          const isoDate = p.timestamp.slice(0, 10);
+          const mtLabel = formatHourMT(p.hour_of_day, isoDate);
+          const { hour: mtHour } = utcHourToMtHour(p.hour_of_day, isoDate);
+          const period = schoolPeriodFor(mtHour);
           return (
             <button
               key={`${p.timestamp}-${i}`}
               type="button"
-              aria-label={`${formatHour(p.hour_of_day)}, ${visual.label}${
+              aria-label={`${mtLabel}, ${visual.label}${
                 p.fallback_used ? ", estimated from recent patterns" : ""
               }. Tap for details.`}
               aria-pressed={isSelected}
@@ -194,20 +200,30 @@ export function HourlyPredictionStrip({
                 />
               </span>
 
-              {/* Hour label */}
+              {/* Hour label (Mountain Time) */}
               <span className="text-xs font-semibold tabular-nums text-slate-700">
-                {formatHour(p.hour_of_day)}
+                {mtLabel}
               </span>
+
+              {/* School-period bottom band */}
+              <span
+                className={clsx(
+                  "absolute inset-x-0 bottom-0 h-1",
+                  period === "core" && "bg-slate-300",
+                  period === "after_school" && "bg-slate-200",
+                  period === "outside_hours" && "bg-slate-100",
+                )}
+                aria-hidden
+              />
             </button>
           );
         })}
       </div>
 
-      {/* Time-of-day rail */}
-      <div className="mt-2 flex items-center justify-between px-1 text-slate-300">
-        <Sunrise className="h-4 w-4" aria-hidden />
-        <Sun className="h-4 w-4" aria-hidden />
-        <Sunset className="h-4 w-4" aria-hidden />
+      {/* School-day caption row (replaces the sunrise/sun/sunset rail) */}
+      <div className="mt-2 flex justify-around text-[10px] font-medium uppercase tracking-wider text-slate-400">
+        <span>Recess window</span>
+        <span>After-school</span>
       </div>
 
       {/* Legend */}

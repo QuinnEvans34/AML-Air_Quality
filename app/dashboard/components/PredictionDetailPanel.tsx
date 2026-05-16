@@ -35,8 +35,17 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 import { UNSAFE_THRESHOLD, type LocationKey, TARGET_LOCATIONS } from "@/lib/constants";
-import { cellState, formatHour } from "@/lib/plainLanguage";
+import {
+  cellState,
+  formatHourMT,
+  recommendationFor,
+  schoolPeriodFor,
+  type SchoolPeriod,
+} from "@/lib/plainLanguage";
+import { utcHourToMtHour } from "@/lib/timezone";
 import type { HourlyPrediction } from "@/lib/types";
+
+import { NearbySchoolsChips } from "./NearbySchoolsChips";
 
 interface PredictionDetailPanelProps {
   prediction: HourlyPrediction;
@@ -55,8 +64,14 @@ interface Visual {
   recommendation: string;
 }
 
+function periodForPrediction(p: HourlyPrediction): SchoolPeriod {
+  const { hour } = utcHourToMtHour(p.hour_of_day, p.timestamp.slice(0, 10));
+  return schoolPeriodFor(hour);
+}
+
 function visualFor(p: HourlyPrediction): Visual {
   const state = cellState(p);
+  const periods = new Set<SchoolPeriod>([periodForPrediction(p)]);
   if (state === "safe-high" || state === "safe-medium") {
     return {
       Icon: ShieldCheck,
@@ -66,8 +81,7 @@ function visualFor(p: HourlyPrediction): Visual {
       accent: "text-safe-700",
       iconBg: "bg-safe-100",
       iconColor: "text-safe-700",
-      recommendation:
-        "Outdoor recess is fine during this hour based on what the model sees.",
+      recommendation: recommendationFor(false, periods),
     };
   }
   if (state === "borderline") {
@@ -92,8 +106,7 @@ function visualFor(p: HourlyPrediction): Visual {
       accent: "text-unsafe-700",
       iconBg: "bg-unsafe-100",
       iconColor: "text-unsafe-700",
-      recommendation:
-        "Strongly recommend indoor recess during this hour. PM2.5 is predicted to be well above the unsafe threshold.",
+      recommendation: recommendationFor(true, periods),
     };
   }
   return {
@@ -104,8 +117,7 @@ function visualFor(p: HourlyPrediction): Visual {
     accent: "text-unsafe-700",
     iconBg: "bg-unsafe-100",
     iconColor: "text-unsafe-700",
-    recommendation:
-      "Recommend indoor recess during this hour. PM2.5 is predicted to be above the unsafe threshold.",
+    recommendation: recommendationFor(true, periods),
   };
 }
 
@@ -123,7 +135,7 @@ export function PredictionDetailPanel({
   return (
     <div
       role="region"
-      aria-label={`Details for ${formatHour(prediction.hour_of_day)}`}
+      aria-label={`Details for ${formatHourMT(prediction.hour_of_day, prediction.timestamp.slice(0, 10))}`}
       className={clsx(
         "relative rounded-3xl border px-6 py-6 shadow-soft animate-slide-up sm:px-8",
         visual.cardBg,
@@ -150,7 +162,7 @@ export function PredictionDetailPanel({
             {visual.badgeLabel}
           </p>
           <h3 className="mt-1 text-xl font-semibold tracking-tight text-slate-900">
-            {locationLabel} at {formatHour(prediction.hour_of_day)}
+            {locationLabel} at {formatHourMT(prediction.hour_of_day, prediction.timestamp.slice(0, 10))}
           </h3>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-700">
             {visual.recommendation}
@@ -181,6 +193,10 @@ export function PredictionDetailPanel({
           sub={sourceSub(prediction)}
           accent="text-slate-700"
         />
+      </div>
+
+      <div className="mt-5">
+        <NearbySchoolsChips location={location} compact />
       </div>
 
       {/* "Why we think this" — feature snapshot */}
@@ -274,8 +290,8 @@ function FeatureGrid({ prediction }: FeatureGridProps) {
   const items: Array<{ k: string; v: string; hint?: string }> = [
     {
       k: "Hour",
-      v: `${formatHour(prediction.hour_of_day)} UTC`,
-      hint: "Diurnal cycle is one of the model's strongest signals.",
+      v: formatHourMT(prediction.hour_of_day, prediction.timestamp.slice(0, 10)),
+      hint: "Times shown in Mountain (MST/MDT). The model's underlying clock is UTC.",
     },
     {
       k: "Verdict",

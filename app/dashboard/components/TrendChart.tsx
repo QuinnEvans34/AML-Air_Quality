@@ -10,9 +10,8 @@
 import {
   Activity,
   Database,
-  Loader2,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   Area,
   CartesianGrid,
@@ -25,7 +24,6 @@ import {
   YAxis,
 } from "recharts";
 
-import { getTrend } from "@/lib/api";
 import {
   TARGET_LOCATIONS,
   UNSAFE_THRESHOLD,
@@ -35,6 +33,7 @@ import type { TrendPoint } from "@/lib/types";
 
 interface TrendChartProps {
   location: LocationKey;
+  points: TrendPoint[];
   days?: number;
 }
 
@@ -44,33 +43,7 @@ interface ChartPoint {
   is_unsafe: boolean;
 }
 
-export function TrendChart({ location, days = 7 }: TrendChartProps) {
-  const [points, setPoints] = useState<TrendPoint[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    void (async () => {
-      try {
-        const res = await getTrend(location, days);
-        if (cancelled) return;
-        setPoints(res.points);
-      } catch (err) {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Unknown error");
-        setPoints([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [location, days]);
-
+export function TrendChart({ location, points, days = 7 }: TrendChartProps) {
   const chartData = useMemo<ChartPoint[]>(
     () =>
       points
@@ -118,7 +91,7 @@ export function TrendChart({ location, days = 7 }: TrendChartProps) {
           <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-500">
             <Activity className="h-3 w-3" aria-hidden />
             <span>
-              Real hourly sensor readings · last {days} days · units μg/m³
+              Real hourly sensor readings · last {days} days · μg/m³ · Mountain Time
             </span>
           </p>
         </div>
@@ -143,32 +116,14 @@ export function TrendChart({ location, days = 7 }: TrendChartProps) {
       </div>
 
       {/* Chart */}
-      {loading && (
-        <div
-          className="mt-5 flex h-56 items-center justify-center text-slate-400"
-          aria-busy="true"
-        >
-          <Loader2 className="h-6 w-6 animate-spin" aria-hidden />
-        </div>
-      )}
-
-      {!loading && error && (
-        <div role="alert" className="mt-5 rounded-2xl bg-unsafe-50 px-4 py-3">
-          <p className="text-sm font-medium text-unsafe-700">
-            Couldn&apos;t load the trend chart.
-          </p>
-          <p className="mt-1 text-xs text-unsafe-700">{error}</p>
-        </div>
-      )}
-
-      {!loading && !error && chartData.length === 0 && (
+      {chartData.length === 0 && (
         <p className="mt-5 rounded-2xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
           No recent PM2.5 data for {locationLabel}. The pipeline may not
           have produced any runs in the last {days} days.
         </p>
       )}
 
-      {!loading && !error && chartData.length > 0 && (
+      {chartData.length > 0 && (
         <div
           role="img"
           aria-label={`PM2.5 trend chart for ${locationLabel}. ${days} days of hourly readings. Unsafe threshold at ${UNSAFE_THRESHOLD} micrograms per cubic meter.`}
@@ -270,7 +225,7 @@ function fmtDateTick(value: number): string {
   return d.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
-    timeZone: "UTC",
+    timeZone: "America/Denver",
   });
 }
 
@@ -291,7 +246,7 @@ function TrendTooltip({ active, payload }: TooltipProps) {
     month: "short",
     day: "numeric",
     hour: "numeric",
-    timeZone: "UTC",
+    timeZone: "America/Denver",
   });
   return (
     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-soft">

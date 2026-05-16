@@ -14,24 +14,65 @@ export const UNSAFE_THRESHOLD = 35.4 as const;
 
 export type LocationKey = "red_butte" | "smithfield" | "ledges";
 
-export const TARGET_LOCATIONS: Record<
-  LocationKey,
-  { id: number; label: string; region: string }
-> = {
+/** A K-5 elementary served by the location's air shed. */
+export interface School {
+  name: string;
+  address: string;
+}
+
+/** Stakeholder-facing metadata for each target location. The label /
+ *  region fields are kept for back-compat with components that haven't
+ *  been refactored to surface school names. */
+export interface LocationMeta {
+  id: number;
+  label: string;
+  region: string;
+  primary_school: string;
+  district: string;
+  sensor_label: string;
+  nearby_schools: School[];
+}
+
+export const TARGET_LOCATIONS: Record<LocationKey, LocationMeta> = {
   red_butte: {
     id: 3318370,
     label: "Red Butte",
     region: "Salt Lake County",
+    primary_school: "Bonneville Elementary",
+    district: "Salt Lake City School District",
+    sensor_label: "Red Butte sensor",
+    nearby_schools: [
+      { name: "Bonneville Elementary",   address: "1145 S 1900 E, Salt Lake City, UT 84108" },
+      { name: "Indian Hills Elementary", address: "1340 E St Marys Way, Salt Lake City, UT 84108" },
+      { name: "Wasatch Elementary",      address: "30 R St, Salt Lake City, UT 84103" },
+      { name: "Uintah Elementary",       address: "1571 E 1300 S, Salt Lake City, UT 84105" },
+    ],
   },
   smithfield: {
     id: 305,
     label: "Smithfield",
     region: "Cache Valley",
+    primary_school: "Summit Elementary",
+    district: "Cache County School District",
+    sensor_label: "Smithfield sensor",
+    nearby_schools: [
+      { name: "Summit Elementary",      address: "100 N 200 W, Smithfield, UT 84335" },
+      { name: "Birch Creek Elementary", address: "825 S Main St, Smithfield, UT 84335" },
+      { name: "Heritage Elementary",    address: "75 N Main St, Smithfield, UT 84335" },
+    ],
   },
   ledges: {
     id: 6158842,
     label: "Ledges",
     region: "Snow Canyon · St. George",
+    primary_school: "Red Mountain Elementary",
+    district: "Washington County School District",
+    sensor_label: "Ledges sensor",
+    nearby_schools: [
+      { name: "Red Mountain Elementary",   address: "940 N 200 W, Ivins, UT 84738" },
+      { name: "Diamond Valley Elementary", address: "5530 N Diamond Valley Dr, St. George, UT 84770" },
+      { name: "Coral Cliffs Elementary",   address: "1955 W 530 N, St. George, UT 84770" },
+    ],
   },
 };
 

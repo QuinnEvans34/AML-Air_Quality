@@ -19,6 +19,7 @@ import {
   TARGET_LOCATIONS,
   type LocationKey,
 } from "./constants";
+import { utcHourToMtHour } from "./timezone";
 import type { HourlyPrediction, PlainLanguageVerdict } from "./types";
 
 /**
@@ -54,6 +55,62 @@ export function formatHour(hour: number): string {
   const period = h < 12 ? "AM" : "PM";
   const display = h % 12 === 0 ? 12 : h % 12;
   return `${display} ${period}`;
+}
+
+/**
+ * Format a UTC hour-of-day for display to a Mountain-Time user.
+ * Returns "8 AM MT" / "2 PM MT" etc. Uses the date-of-record to
+ * disambiguate DST and date-shifted cases.
+ */
+export function formatHourMT(
+  utcHourOfDay: number,
+  isoDateUtc: string,
+): string {
+  const { hour } = utcHourToMtHour(utcHourOfDay, isoDateUtc);
+  return `${formatHour(hour)} MT`;
+}
+
+/**
+ * Utah K-5 school-day boundaries:
+ *    08:00 – 15:59 Mountain  → core recess window
+ *    16:00 – 18:59 Mountain  → after-school clubs, sports, latchkey
+ *    everything else         → outside school operations
+ */
+export type SchoolPeriod = "core" | "after_school" | "outside_hours";
+
+export function schoolPeriodFor(mtHour: number): SchoolPeriod {
+  if (mtHour >= 8 && mtHour <= 15) return "core";
+  if (mtHour >= 16 && mtHour <= 18) return "after_school";
+  return "outside_hours";
+}
+
+/**
+ * Recommendation copy tailored to a K-5 principal. The decision they
+ * need to make differs by time of day; the language reflects that.
+ */
+export function recommendationFor(
+  any_unsafe: boolean,
+  periods: Set<SchoolPeriod>,
+): string {
+  if (!any_unsafe) {
+    return "Outdoor recess and after-school activities are clear to proceed.";
+  }
+  const hasCore = periods.has("core");
+  const hasAfter = periods.has("after_school");
+  const hasOutside = periods.has("outside_hours");
+  if (hasCore && hasAfter) {
+    return "Hold recess indoors during those hours, and have after-school staff monitor sensitive students closely.";
+  }
+  if (hasCore) {
+    return "Hold recess indoors during those hours.";
+  }
+  if (hasAfter) {
+    return "After-school staff and coaches should monitor outdoor activities; consider moving practice indoors for students with asthma or other respiratory sensitivities.";
+  }
+  if (hasOutside) {
+    return "Air quality is forecast to be unsafe outside school hours. No recess action needed, but flag to families with sensitive students.";
+  }
+  return "Hold recess indoors during those hours.";
 }
 
 /** Format a Date as e.g. "Friday, May 15". */
@@ -182,17 +239,37 @@ export function plainLanguageHeadline(
   predictions: HourlyPrediction[],
 ): PlainLanguageVerdict {
   const meta = TARGET_LOCATIONS[locationKey];
-  const locationLabel = meta ? meta.label : locationKey;
+  const locationLabel = meta ? meta.primary_school : locationKey;
   const confidence = overallConfidence(predictions);
-  const unsafeRanges = groupConsecutiveUnsafe(predictions);
+
+  // Convert each prediction's hour_of_day from UTC (what the model uses)
+  // to Mountain Time (what the dashboard's stakeholder reads), so the
+  // headline's "between X PM and Y PM" phrasing matches every other
+  // hour label on the page. The model still receives UTC hour_of_day
+  // upstream; we only rebase for the user-facing string here.
+  const predictionsInMt: HourlyPrediction[] = predictions.map((p) => {
+    const { hour } = utcHourToMtHour(p.hour_of_day, p.timestamp.slice(0, 10));
+    return { ...p, hour_of_day: hour };
+  });
+
+  const unsafeRanges = groupConsecutiveUnsafe(predictionsInMt);
   const any_unsafe = unsafeRanges.length > 0;
+
+  // Collect Mountain-Time school periods every unsafe prediction falls
+  // into; this drives the principal-voice recommendation copy.
+  const unsafePeriods = new Set<SchoolPeriod>();
+  for (const p of predictions) {
+    if (p.is_unsafe !== 1) continue;
+    const { hour } = utcHourToMtHour(p.hour_of_day, p.timestamp.slice(0, 10));
+    unsafePeriods.add(schoolPeriodFor(hour));
+  }
 
   if (!any_unsafe) {
     return {
       headline:
         `Air quality at ${locationLabel} is predicted to be SAFE ` +
         `across the requested hours.`,
-      recommendation: "Outdoor activities should be fine.",
+      recommendation: recommendationFor(false, unsafePeriods),
       confidence,
       any_unsafe: false,
     };
@@ -203,7 +280,7 @@ export function plainLanguageHeadline(
     headline:
       `Air quality at ${locationLabel} is predicted to be UNSAFE ` +
       `${rangeText}.`,
-    recommendation: "We recommend indoor recess during those hours.",
+    recommendation: recommendationFor(true, unsafePeriods),
     confidence,
     any_unsafe: true,
   };
