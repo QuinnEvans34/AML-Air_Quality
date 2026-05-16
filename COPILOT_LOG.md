@@ -275,12 +275,35 @@ conventions.
 
 **Summary:** Created a Windows PowerShell launcher (`scripts/run_app.ps1`) for the full AirAlert stack. The launcher starts MLflow (port 5001), FastAPI (port 8000), and Next.js dashboard (port 3000) in a single command. It automatically detects the latest raw PM2.5 data, seeds synthetic data on first run, bootstraps models if needed, and opens the dashboard URL in the default browser once all services are ready. Includes process monitoring and graceful cleanup on Ctrl+C. Also patched `scripts/bootstrap_train.py` line 124 to change Unicode arrow `→` to ASCII `->` for Windows console compatibility.
 
+---
+
+## Entry 10 — GJ — 2026-05-16
+**Module:** `scripts/run_app.ps1`, `app/dashboard` dependencies
+
+**Summary:** Debugged and resolved intermittent Windows launcher failures where the dashboard opened but appeared to load forever (or failed readiness checks). Root cause was a combination of dashboard dependency drift (`date-fns-tz` missing in local `node_modules`), stale/locked log files between runs, and slow first-request Next.js compilation that looked like a hang.
+
+Implemented fixes:
+- Added dependency guard in `scripts/run_app.ps1` to run `npm install` when `node_modules` or required package `date-fns-tz` is missing.
+- Made log cleanup resilient to locked files by truncating/ignoring cleanup errors instead of aborting startup.
+- Standardized dashboard startup environment by setting `PORT` from `DashboardPort`.
+- Added dashboard warm-up probe before browser open to reduce the "stuck loading" first impression during initial compile.
+- Expanded per-run log cleanup to clear `*.out.log` and `*.err.log` files so old logs do not mislead troubleshooting.
+
+Validation outcome: launcher now reaches "AirAlert stack is up" consistently, dashboard compiles and serves `/` successfully, and API routes (`/api/health`, `/api/trend`, `/api/features`, `/api/predict`) return expected responses.
 
 
 
-## Entry 10 — QE — 2026-05-16
+## Entry 11 — QE — 2026-05-16
 ## End of project reflection:
 
 The most useful interaction that I had through out the process of developing this project was very recent. Today, I did a full audit of the code, and had claude write out a full summary and audit based on the assignment outline. Here I was able to pick up a few problems that I wanted to fix before our final submission, and I was also able to feel more confident about my final submission. Knowing what was working, and what needed to be done allowed me to really fine tune the final submission. I found a few details that I wanted to fix, such as changing the time zone to MST instead of UTC in the dashboard UI. We trained all the models on UTC, but this did not make sense in the context of our dashboard, and would not be useful to our shareholders. Because of this, I was able to make final fixes, and really clean up the UI and UX. The most suprising failure stems from the final accuracy that our models ended up getting. The past week we were sitting in the mid to low 90s, and now we have been sitting in the mid to low 80s. This is because I was giving the model more access to our data, and having it make more predictions. I thought we had a better accuracy than we really did, just because the scope of the predictions were so small. If it made 4 accurate predicitions, then we would end up with a really high F1, but predicting a full day brought our accuracy down. I am happy with the final accuracy scores, and think that using a logical regression was the best choice, because it is very explainable. Our stakeholders are schools, they will be basing if students should be outside for recess and after school activities. Having clear explainability to a non technical audience will be very important for our dashboard, so I beleive the final product ended up working great for our specific use case. I ended up playing with a few different models just to see what they looked like, a hist gradient boost model had much higher accuracy, being high 90s, but is not as clear in the predictions that it makes. So I think the explainability and clarity that comes from our dashboard out weighs this. If I were to do this project again, I would have tried to add more locations, we ended up having 3, but I think having more locations would have made our case a little stronger, and would have given us more data to look through. I really could not find any clear patterns, working with small amounts of data, and I think it would have been helpful to be able to look into patterns in different parts of the state to see if they line up with each other, or if certain parts of the state have much safer or unsafe air quality. Overall, I am really happy with this project, I think our final dashboard turned out really good, and I had a great experience going through all the decision making. I also think working with a team mate ended up making this project flow much better. I was able to bounch ideas of Gracelyn, and see what she thought about each of the decisions we made. This made me much more confident in the final choices we made, because I was able to really walk through each step of the planning process.
+
+---
+
+## Entry 12 — GJ — 2026-05-16
+## End of project reflection:
+
+The most useful Copilot interaction for me was the step-by-step debugging workflow for the Windows launcher and dashboard startup, because it helped me isolate issues quickly across MLflow, FastAPI, and Next.js and turn them into repeatable fixes. The most surprising failure was that the dashboard could appear to be running while still effectively stuck due to a missing frontend dependency and first-request compile delay, which made it look like an app failure even when parts of the stack were up. One thing I would do differently next project is add stricter preflight checks at the start, especially dependency validation, port/process checks, and clean log handling, so cross-platform setup problems are caught early instead of near the deadline.
+
 
 

@@ -92,6 +92,59 @@ function Test-UrlReady {
         Start-Sleep -Seconds 1
     }
 
+    # Try the hostname variant once if direct IP probing fails.
+    $altUrl = $null
+    if ($Url -match '127\.0\.0\.1') {
+        $altUrl = $Url -replace '127\.0\.0\.1', 'localhost'
+    }
+    elseif ($Url -match 'localhost') {
+        $altUrl = $Url -replace 'localhost', '127.0.0.1'
+    }
+
+    if ($null -ne $altUrl) {
+        try {
+            $response = Invoke-WebRequest -Uri $altUrl -UseBasicParsing -TimeoutSec 5
+            $statusCode = [int]$response.StatusCode
+            if ($AcceptStatusCodes -contains $statusCode) {
+                return $true
+            }
+        }
+        catch {
+            # Ignore and fall through to return false.
+        }
+    }
+
+    return $false
+}
+
+# Check whether a TCP port is accepting connections without waiting
+# for an HTTP response. This is useful for Next.js dev server startup,
+# where the listener may come up before the first page request is ready.
+function Test-TcpPortReady {
+    param(
+        [string]$HostName,
+        [int]$Port,
+        [int]$TimeoutSeconds = 60
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $client = [System.Net.Sockets.TcpClient]::new()
+            $async = $client.BeginConnect($HostName, $Port, $null, $null)
+            if ($async.AsyncWaitHandle.WaitOne(1000, $false) -and $client.Connected) {
+                $client.Close()
+                return $true
+            }
+            $client.Close()
+        }
+        catch {
+            # Ignore transient connect failures and keep polling.
+        }
+
+        Start-Sleep -Seconds 1
+    }
+
     return $false
 }
 
@@ -234,10 +287,32 @@ if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
 
 # Create logs directory and clear old logs
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
-foreach ($logName in @('mlflow.log', 'fastapi.log', 'dashboard.log', 'bootstrap.log')) {
+foreach ($logName in @(
+    'mlflow.out.log',
+    'mlflow.err.log',
+    'fastapi.out.log',
+    'fastapi.err.log',
+    'dashboard.out.log',
+    'dashboard.err.log',
+    'bootstrap.out.log',
+    'bootstrap.err.log',
+    'dashboard.log'
+)) {
     $logPath = Join-Path $LogsDir $logName
     if (Test-Path $logPath) {
-        Remove-Item $logPath -Force
+        try {
+            Remove-Item $logPath -Force -ErrorAction Stop
+        }
+        catch {
+            # If a previous run still holds the file handle, truncate in place
+            # so current logs remain readable without failing startup.
+            try {
+                Set-Content -Path $logPath -Value '' -Force -ErrorAction SilentlyContinue
+            }
+            catch {
+                # Ignore log cleanup failures and continue startup.
+            }
+        }
     }
 }
 
@@ -312,8 +387,14 @@ if (-not (Test-UrlReady -Url ("$FastApiUrl/health") -AcceptStatusCodes @(200) -T
 }
 
 Write-Step 'Starting Next.js dashboard...'
-if (-not (Test-Path (Join-Path $DashboardDir 'node_modules'))) {
-    Write-Step 'Installing dashboard dependencies (first run)...'
+# Install dashboard dependencies if node_modules is missing OR if a required
+# package added since last install is missing from node_modules.
+$nodeModulesPath = Join-Path $DashboardDir 'node_modules'
+$requiredTzPkgPath = Join-Path $DashboardDir 'node_modules\date-fns-tz\package.json'
+$needsDashboardInstall = (-not (Test-Path $nodeModulesPath)) -or (-not (Test-Path $requiredTzPkgPath))
+
+if ($needsDashboardInstall) {
+    Write-Step 'Installing dashboard dependencies...'
     & npm.cmd install *> (Join-Path $LogsDir 'dashboard.log')
     if ($LASTEXITCODE -ne 0) {
         Fail "npm install failed. Check $(Join-Path $LogsDir 'dashboard.log')."
@@ -322,11 +403,20 @@ if (-not (Test-Path (Join-Path $DashboardDir 'node_modules'))) {
 
 $env:FASTAPI_URL = $FastApiUrl
 $env:RAW_DATA_DIR = $RawDir
+# Force Next.js dev server to the expected dashboard port.
+# This avoids inherited shell env (e.g., PORT=3001) overriding defaults.
+$env:PORT = "$DashboardPort"
 $dashboardProcess = Start-LoggedProcess -FilePath 'npm.cmd' -ArgumentList @('run', 'dev') -WorkingDirectory $DashboardDir -StdOutPath (Join-Path $LogsDir 'dashboard.out.log') -StdErrPath (Join-Path $LogsDir 'dashboard.err.log')
 
-if (-not (Test-UrlReady -Url $DashboardUrl -TimeoutSeconds 90)) {
-    Fail "Dashboard did not become ready at $DashboardUrl. Check $(Join-Path $LogsDir 'dashboard.out.log') and $(Join-Path $LogsDir 'dashboard.err.log')."
+if (-not (Test-TcpPortReady -HostName '127.0.0.1' -Port $DashboardPort -TimeoutSeconds 90)) {
+    Fail "Dashboard port $DashboardPort did not become ready. Check $(Join-Path $LogsDir 'dashboard.out.log') and $(Join-Path $LogsDir 'dashboard.err.log')."
 }
+
+# Warm up Next.js first-request compilation before opening the browser.
+# On Windows/OneDrive this can take 20-30s the first time and otherwise
+# looks like an infinite loading page.
+Write-Step 'Warming up dashboard route...'
+[void](Test-UrlReady -Url $DashboardUrl -AcceptStatusCodes @(200) -TimeoutSeconds 120)
 
 try {
     Start-Process $DashboardUrl
