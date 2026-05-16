@@ -121,7 +121,7 @@ def _print_summary(metrics: dict) -> None:
         )
     print()
     print("Next steps:")
-    print("  1. Open http://localhost:5001 → Models tab. Confirm three")
+    print("  1. Open http://localhost:5001 -> Models tab. Confirm three")
     print("     AirAlert_* entries are at stage: Production.")
     print("  2. In a new terminal, start FastAPI:")
     print(

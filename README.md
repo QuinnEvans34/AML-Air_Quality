@@ -82,6 +82,18 @@ the Astro CLI inside Docker.
    uvicorn include.src.serve:app --port 8000
    ```
 
+### Windows quick start
+
+If you are on PowerShell, run the repo launcher instead of the Bash script:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\run_app.ps1
+```
+
+On the first run, the launcher seeds synthetic raw history, bootstraps the
+three Production models in MLflow, starts FastAPI, and starts the dashboard.
+
 ## Documentation
 
 - [`INTERFACE.md`](INTERFACE.md) — design decisions, data contracts, and
