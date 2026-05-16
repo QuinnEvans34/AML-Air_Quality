@@ -57,7 +57,7 @@ export function LocationPicker({
               )}
             >
               <span className="block text-sm font-medium leading-tight">
-                {meta.label}
+                {meta.primary_school}
               </span>
               <span
                 className={clsx(
@@ -65,7 +65,15 @@ export function LocationPicker({
                   isActive ? "text-brand-100" : "text-slate-500",
                 )}
               >
-                {meta.region}
+                {meta.district}
+              </span>
+              <span
+                className={clsx(
+                  "mt-1 block text-[10px] leading-tight",
+                  isActive ? "text-brand-200" : "text-slate-400",
+                )}
+              >
+                + {meta.nearby_schools.length - 1} nearby · {meta.sensor_label}
               </span>
             </button>
           );

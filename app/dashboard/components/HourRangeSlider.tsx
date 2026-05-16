@@ -78,6 +78,7 @@ export function HourRangeSlider({
           <span className="font-semibold text-slate-900">
             {formatHour(end)}
           </span>
+          <span className="ml-1 text-slate-400">MT</span>
         </span>
       </div>
 

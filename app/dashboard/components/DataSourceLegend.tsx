@@ -34,7 +34,7 @@ export function DataSourceLegend({
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white/60 px-4 py-3 text-xs text-slate-600">
       <span className="font-semibold uppercase tracking-wider text-slate-500">
-        Where the inputs came from
+        How we filled in the inputs
       </span>
 
       <SourcePill
@@ -57,6 +57,9 @@ export function DataSourceLegend({
           tone="caution"
         />
       )}
+      <span className="ml-auto text-slate-400">
+        Estimates are typical-day patterns, not your specific day&apos;s sensor readings.
+      </span>
     </div>
   );
 }

@@ -16,10 +16,10 @@
 "use client";
 
 import { Wind } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { DataSourceLegend } from "@/components/DataSourceLegend";
-import { DateTimePicker } from "@/components/DateTimePicker";
+import { DayPicker } from "@/components/DayPicker";
 import { HealthBadge } from "@/components/HealthBadge";
 import { HourRangeSlider } from "@/components/HourRangeSlider";
 import { HourlyPredictionStrip } from "@/components/HourlyPredictionStrip";
@@ -27,16 +27,25 @@ import { LocationPicker } from "@/components/LocationPicker";
 import { PredictButton } from "@/components/PredictButton";
 import { PredictionCard } from "@/components/PredictionCard";
 import { PredictionDetailPanel } from "@/components/PredictionDetailPanel";
+import { TodaysVerdictBadge } from "@/components/TodaysVerdictBadge";
 import { TrendChart } from "@/components/TrendChart";
 
-import { predictRange } from "@/lib/api";
+import { getTrend, predictRange } from "@/lib/api";
 import {
-  REFERENCE_WINDOW_DAYS,
   UNSAFE_THRESHOLD,
   type LocationKey,
 } from "@/lib/constants";
 import { plainLanguageHeadline } from "@/lib/plainLanguage";
-import type { HourlyPrediction, PlainLanguageVerdict } from "@/lib/types";
+import {
+  mtFormat,
+  mtTodayIsoDate,
+  mtWallClockToUtcDate,
+} from "@/lib/timezone";
+import type {
+  HourlyPrediction,
+  PlainLanguageVerdict,
+  TrendPoint,
+} from "@/lib/types";
 
 type PageState = "empty" | "loading" | "result" | "error";
 
@@ -49,7 +58,7 @@ interface PredictionResult {
 export default function Page() {
   /* ── form state ─────────────────────────────────────────────── */
   const [location, setLocation] = useState<LocationKey>("red_butte");
-  const [date, setDate] = useState<string>(todayIsoDate);
+  const [date, setDate] = useState<string>(mtTodayIsoDate);
   const [hourRange, setHourRange] = useState({ start: 8, end: 18 });
 
   /* ── result state ───────────────────────────────────────────── */
@@ -61,25 +70,43 @@ export default function Page() {
   /* ── health state (gates the predict button) ────────────────── */
   const [serviceOnline, setServiceOnline] = useState(true);
 
-  const dateBounds = useMemo(() => {
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    const minDate = new Date(today);
-    minDate.setUTCDate(minDate.getUTCDate() - 30);
-    const maxDate = new Date(today);
-    maxDate.setUTCDate(maxDate.getUTCDate() + 7);
-    return {
-      min: minDate.toISOString().slice(0, 10),
-      max: maxDate.toISOString().slice(0, 10),
+  /* ── trend data (lifted from TrendChart so PredictionCard sees it too) ── */
+  const [trendPoints, setTrendPoints] = useState<TrendPoint[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getTrend(location, 7).then((r) => {
+      if (!cancelled) setTrendPoints(r.points);
+    });
+    return () => {
+      cancelled = true;
     };
-  }, []);
+  }, [location]);
+
+  const yesterdayUnsafeHours = useMemo<number | null>(() => {
+    if (trendPoints.length === 0) return null;
+    const yesterdayIso = mtFormat(
+      new Date(Date.now() - 86_400_000),
+      "yyyy-MM-dd",
+    );
+    const yesterdayPoints = trendPoints.filter(
+      (p) =>
+        mtFormat(
+          new Date(p.timestamp.replace(" ", "T")),
+          "yyyy-MM-dd",
+        ) === yesterdayIso,
+    );
+    if (yesterdayPoints.length === 0) return null;
+    return yesterdayPoints.filter((p) => p.is_unsafe).length;
+  }, [trendPoints]);
 
   const handleSubmit = async () => {
     setPageState("loading");
     setError(null);
     setSelectedHourIdx(null);
     try {
-      const fromIso = `${date}T${pad(hourRange.start)}:00:00Z`;
+      const fromUtcDate = mtWallClockToUtcDate(date, hourRange.start);
+      const fromIso = fromUtcDate.toISOString();
       const hours = hourRange.end - hourRange.start + 1;
       const { rows, reference_window_days } = await predictRange(
         location,
@@ -107,12 +134,6 @@ export default function Page() {
         ? "default"
         : "disabled";
 
-  const todayHuman = new Date().toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-
   const unsafeHourCount = result?.predictions.filter((p) => p.is_unsafe === 1)
     .length;
 
@@ -129,7 +150,7 @@ export default function Page() {
               AirAlert
             </h1>
             <p className="mt-1 text-sm text-slate-500 sm:text-base">
-              {todayHuman} · Utah PM2.5 outlook
+              Daily recess and athletics guidance for Utah K-5 administrators
             </p>
           </div>
         </div>
@@ -137,6 +158,13 @@ export default function Page() {
           onStatusChange={(s) => setServiceOnline(s === "online")}
         />
       </header>
+
+      {/* ── ONE-GLANCE VERDICT BADGE ───────────────────────── */}
+      {pageState === "result" && result && (
+        <section className="mb-4">
+          <TodaysVerdictBadge predictions={result.predictions} />
+        </section>
+      )}
 
       {/* ── CONTROLS + HERO ────────────────────────────────── */}
       <section className="grid gap-4 lg:grid-cols-5">
@@ -154,11 +182,9 @@ export default function Page() {
               onChange={setLocation}
               disabled={pageState === "loading"}
             />
-            <DateTimePicker
+            <DayPicker
               value={date}
               onChange={setDate}
-              minDate={dateBounds.min}
-              maxDate={dateBounds.max}
               disabled={pageState === "loading"}
             />
             <HourRangeSlider
@@ -183,10 +209,12 @@ export default function Page() {
         <div className="lg:col-span-3">
           <PredictionCard
             state={pageState}
+            location={location}
             verdict={result?.verdict}
             errorMessage={error}
             unsafeHours={unsafeHourCount}
             totalHours={result?.predictions.length}
+            yesterdayUnsafeHours={yesterdayUnsafeHours}
           />
         </div>
       </section>
@@ -219,7 +247,7 @@ export default function Page() {
 
       {/* ── TREND CHART ────────────────────────────────────── */}
       <section className="mt-4">
-        <TrendChart location={location} />
+        <TrendChart location={location} points={trendPoints} />
       </section>
 
       {/* ── DATA SOURCE LEGEND ─────────────────────────────── */}
@@ -243,21 +271,10 @@ export default function Page() {
           boundary. Predictions are advisory; this is not medical advice.
         </p>
         <p className="mt-1.5 text-slate-400">
-          Data via OpenAQ · MLflow · FastAPI · Next.js
+          Each location pairs an OpenAQ sensor with the public K-5 schools
+          in its air shed. Times shown in Mountain (MST/MDT).
         </p>
       </footer>
     </main>
   );
-}
-
-/* ── helpers ─────────────────────────────────────────────────── */
-
-function pad(n: number) {
-  return n.toString().padStart(2, "0");
-}
-
-function todayIsoDate(): string {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return d.toISOString().slice(0, 10);
 }
